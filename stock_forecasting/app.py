@@ -1,153 +1,164 @@
-from datetime import UTC, datetime
+"""Streamlit UI for stock_forecasting — watchlist, price + forecast overlay chart.
 
-import pandas as pd
+The chart is built with Plotly (`st.plotly_chart`): `streamlit-lightweight-charts`
+has no fill-between / BandSeries API so the CI-band ribbon cannot render there
+(ruling carried from god, 2026-09-01). The service layer stays Streamlit-free so a
+React+FastAPI path remains open later if ever needed.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+
 import streamlit as st
 from sqlmodel import Session, select
-from streamlit_lightweight_charts import renderLightweightCharts
 
 from stock_forecasting.database import get_engine
-from stock_forecasting.schema import Ticker
+from stock_forecasting.schema import OhlcvBar, PredictionSnapshot, Ticker
+from stock_forecasting.viz import DEFAULT_LATEST_HORIZONS, build_price_figure
+
+RANGE_DAYS: dict[str, int] = {"1M": 31, "3M": 93, "6M": 186, "1Y": 372}
 
 
-def load_tickers(engine):
+def load_tickers(engine) -> list[Ticker]:
+    """Return all active tickers."""
     with Session(engine) as session:
-        return session.exec(select(Ticker).where(Ticker.active == 1)).all()
+        return list(session.exec(select(Ticker).where(Ticker.active == 1)).all())
 
-def main():
-    st.set_page_config(layout="wide", page_title="Stock Forecasting")
-    engine = get_engine()
 
+def load_bars(engine, symbol: str, days: int) -> list[OhlcvBar]:
+    """Return the selected ticker's daily bars within the last ``days``."""
+    cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+    with Session(engine) as session:
+        return list(
+            session.exec(
+                select(OhlcvBar)
+                .where(
+                    OhlcvBar.ticker == symbol,
+                    OhlcvBar.interval == "1d",
+                    OhlcvBar.ts >= cutoff,
+                )
+                .order_by(OhlcvBar.ts.asc())
+            ).all()
+        )
+
+
+def load_snapshots(engine, symbol: str) -> list[PredictionSnapshot]:
+    """Return all prediction snapshots for a ticker (oldest first)."""
+    with Session(engine) as session:
+        return list(
+            session.exec(
+                select(PredictionSnapshot)
+                .where(PredictionSnapshot.ticker == symbol)
+                .order_by(PredictionSnapshot.made_at.asc())
+            ).all()
+        )
+
+
+def add_ticker(engine, symbol: str) -> None:
+    """Insert a new active equity ticker if it does not already exist."""
+    sym = symbol.strip().upper()
+    if not sym:
+        return
+    with Session(engine) as session:
+        existing = session.exec(select(Ticker).where(Ticker.symbol == sym)).first()
+        if existing:
+            return
+        session.add(
+            Ticker(
+                symbol=sym,
+                asset_class="equity",
+                display_name=sym,
+                provider="yfinance",
+                provider_symbol=sym,
+                price_basis="adjusted",
+                added_at=datetime.now(UTC).isoformat(),
+                active=1,
+            )
+        )
+        session.commit()
+
+
+def render_sidebar(engine, tickers: list[Ticker]) -> None:
+    """Watchlist list + add-ticker form."""
     st.sidebar.title("Watchlist")
-
-    tickers = load_tickers(engine)
     if not tickers:
         st.sidebar.write("No active tickers.")
     else:
         for t in tickers:
-            st.sidebar.write(f"- {t.symbol} ({t.display_name})")
+            st.sidebar.write(f"- **{t.symbol}** · {t.display_name} ({t.asset_class})")
 
-    st.sidebar.subheader("Manage Tickers")
+    st.sidebar.subheader("Manage")
     with st.sidebar.form("add_ticker"):
         new_symbol = st.text_input("Symbol")
-        submit = st.form_submit_button("Add Ticker")
-        if submit and new_symbol:
-            with Session(engine) as session:
-                existing = session.exec(select(Ticker).where(Ticker.symbol == new_symbol.upper())).first()
-                if not existing:
-                    t = Ticker(
-                        symbol=new_symbol.upper(),
-                        asset_class="equity",
-                        display_name=new_symbol.upper(),
-                        provider="yahoo",
-                        provider_symbol=new_symbol.upper(),
-                        price_basis="adjusted",
-                        added_at=datetime.now(UTC).isoformat(),
-                        active=1
-                    )
-                    session.add(t)
-                    session.commit()
-                    st.rerun()
+        if st.form_submit_button("Add ticker") and new_symbol:
+            add_ticker(engine, new_symbol)
+            st.rerun()
+
+
+def render_price_header(symbol: str, bars: list[OhlcvBar]) -> None:
+    """Symbol · latest price · % change from previous close."""
+    if not bars:
+        st.subheader(f"{symbol} — no bars ingested yet")
+        return
+    last = bars[-1]
+    prev_close = bars[-2].close if len(bars) > 1 else last.close
+    pct = ((last.close - prev_close) / prev_close * 100.0) if prev_close else 0.0
+    col1, col2, col3 = st.columns(3)
+    col1.metric(symbol, f"${last.close:,.2f}", f"{pct:+.2f}%")
+    col2.metric("Latest bar", last.ts[:10])
+    col3.metric("Bars in range", str(len(bars)))
+
+
+def render_chart_panel(engine, symbol: str, ticker: Ticker) -> None:
+    """Range / overlay controls + the Plotly actual+forecast chart."""
+    c1, c2, c3 = st.columns([1, 1, 2])
+    range_label = c1.radio("Range", list(RANGE_DAYS), index=2, horizontal=True)
+    use_candles = c2.checkbox("Candles", value=False)
+    show_markers = c2.checkbox("Historical forecasts", value=False)
+    ribbon_horizon = c3.selectbox(
+        "Ribbon horizon", ["1d", "5d", "30d", "(none)"], index=1
+    )
+    latest_horizons = c3.multiselect(
+        "Latest forecast + CI band",
+        list(DEFAULT_LATEST_HORIZONS),
+        default=list(DEFAULT_LATEST_HORIZONS),
+    )
+
+    bars = load_bars(engine, symbol, RANGE_DAYS[range_label])
+    snapshots = load_snapshots(engine, symbol)
+
+    render_price_header(symbol, bars)
+
+    fig = build_price_figure(
+        bars,
+        snapshots,
+        ribbon_horizon=None if ribbon_horizon == "(none)" else ribbon_horizon,
+        show_markers=show_markers,
+        show_actual_candles=use_candles,
+        latest_horizons=tuple(latest_horizons),
+        title=f"{symbol} · actual vs forecast",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def main() -> None:
+    """Render the single-screen forecast view."""
+    st.set_page_config(layout="wide", page_title="Stock Forecasting")
+    engine = get_engine()
+
+    tickers = load_tickers(engine)
+    render_sidebar(engine, tickers)
 
     st.title("Stock Forecast View")
+    if not tickers:
+        st.info("Add a ticker in the sidebar to get started.")
+        return
 
-    if tickers:
-        selected = st.selectbox("Select Ticker", [t.symbol for t in tickers])
-        st.subheader(f"Ticker: {selected}")
-        st.markdown("**Latest Price Badge: $100.00**")  # Dummy for now
+    symbol = st.selectbox("Ticker", [t.symbol for t in tickers])
+    ticker = next(t for t in tickers if t.symbol == symbol)
+    render_chart_panel(engine, symbol, ticker)
 
-        chartOptions = {
-            "layout": {
-                "textColor": 'black',
-                "background": {
-                    "type": 'solid',
-                    "color": 'white'
-                }
-            }
-        }
-        
-        base_date = pd.Timestamp("2023-01-01")
-        dates = [base_date + pd.Timedelta(days=i) for i in range(100)]
-        
-        candle_data = []
-        for i, d in enumerate(dates):
-            candle_data.append({
-                "time": d.strftime("%Y-%m-%d"),
-                "open": 100 + i,
-                "high": 105 + i,
-                "low": 95 + i,
-                "close": 102 + i
-            })
-            
-        line_data = []
-        for i, d in enumerate(dates):
-            line_data.append({
-                "time": d.strftime("%Y-%m-%d"),
-                "value": 100 + i
-            })
-
-        upper_bound = []
-        lower_bound = []
-        for i, d in enumerate(dates[-20:]):
-            upper_bound.append({
-                "time": d.strftime("%Y-%m-%d"),
-                "value": 105 + i + 10
-            })
-            lower_bound.append({
-                "time": d.strftime("%Y-%m-%d"),
-                "value": 95 + i - 10
-            })
-            
-        seriesCandlestickChart = [
-            {
-                "type": "Candlestick",
-                "data": candle_data,
-                "options": {
-                    "upColor": "#26a69a",
-                    "downColor": "#ef5350",
-                    "borderVisible": False,
-                    "wickUpColor": "#26a69a",
-                    "wickDownColor": "#ef5350"
-                }
-            },
-            {
-                "type": "Line",
-                "data": line_data,
-                "options": {
-                    "color": "blue",
-                    "lineWidth": 2
-                }
-            },
-            {
-                "type": "Area",
-                "data": upper_bound,
-                "options": {
-                    "lineColor": "rgba(0,0,0,0)",
-                    "topColor": "rgba(21, 146, 230, 0.4)",
-                    "bottomColor": "rgba(21, 146, 230, 0.0)" 
-                }
-            },
-            {
-                "type": "Line",
-                "data": lower_bound,
-                "options": {
-                    "color": "red",
-                    "lineStyle": 2, 
-                }
-            }
-        ]
-
-        st.write("Attempting to render Multi-series overlay + Ribbon...")
-        renderLightweightCharts([
-            {
-                "chart": chartOptions,
-                "series": seriesCandlestickChart
-            }
-        ], 'multipane')
-
-        st.warning("FAIL_GATE: Ribbon overlay not supported in streamlit-lightweight-charts. "
-                   "The library wraps TradingView Lightweight Charts, which natively lacks a "
-                   "clean 'BandSeries' or 'fill-between' feature for plotting confidence interval ribbons. "
-                   "AreaSeries only fills down to the zero line. Overlapping lines do not create a filled band.")
 
 if __name__ == "__main__":
     main()

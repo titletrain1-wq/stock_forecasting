@@ -8,11 +8,12 @@
 ---
 
 ## Pre-flight Scan & Rulings
-- **Pre-flight Status**: Plan verified against Spec for M0-M4.
+- **Pre-flight Status**: Plan verified against Spec for M0-M4 & M5-M10.
 - **Rulings**:
-  - None so far.
+  - **M6.2 Overlay Gate Ruling (god)**: Option A approved — use Plotly (`st.plotly_chart` via `go.Scatter(fill='tonexty')`) for price/overlay/ribbon chart rendering. Drop `streamlit-lightweight-charts`. NO React+FastAPI pivot. Plotly provides native shaded band fill, candles, multi-series overlays, hover tooltips, and legend toggles within the Python/Streamlit stack. Toby will execute this library swap in M7.
 
 ---
+
 
 ## Milestone Progress Ledger
 
@@ -34,7 +35,27 @@
 
 ### M4: APScheduler nightly retrain + evaluation
 - [x] Task 4.1: APScheduler job setup + retrain job (commit `e58e862`)
-- [ ] Task 4.2: Evaluator + accuracy rebuild
+- [x] Task 4.2: Evaluator + accuracy rebuild (commit `242d81c`)
+
+### M5: LinkMonitor + CircuitBreaker state machine + 8 health checks
+- [x] Task 5.1: LinkMonitor (RTT, error rate, quota tracking) (commit `9530988`)
+- [x] Task 5.2: CircuitBreaker state machine (commit `55fe358`)
+- [x] Task 5.3: 8 health checks + system_status computation (commit `66357d7`)
+
+### M6: Streamlit UI part 1 (watchlist + chart) + CoinGecko/Coinbase providers
+- [x] Task 6.1: CoinGeckoProvider + CoinbaseProvider (commit `5579faa`)
+- [x] Task 6.2: Streamlit app scaffold — watchlist + price chart (commit `cf223e0`)
+
+### M7–M10: Open Tasks for Toby Handoff
+- [ ] Task 7.1: Accuracy panel + Explain panel
+- [ ] Task 7.2: Health panel
+- [ ] Task 8.1: TiingoProvider + FinnhubProvider (equity fallbacks)
+- [ ] Task 8.2: Wire CircuitBreaker into IngestionService failover
+- [ ] Task 9.1: DydxDerivativesProvider (funding rate + open interest)
+- [ ] Task 9.2: Add 4 crypto-only features to FeatureBuilder
+- [ ] Task 10.1: Chaos test suite
+- [ ] Task 10.2: README + ARCHITECTURE + API docs + v1.0.0
+- [ ] Task 10.3: Multi-week live run verification + handoff
 
 ---
 
@@ -47,7 +68,35 @@
 - **Task 2.1**: Complete. Implemented FeatureBuilder with 17 no-lookahead technical indicators and property test. Committed `857c563`. 22 tests pass.
 - **Task 3.1**: Complete. Implemented Trainer with walk-forward validation and ModelArtifact / joblib persistence. Committed `b43ea58`. 26 tests pass.
 - **Task 3.2**: Complete. Implemented ForecastService with transactional prediction snapshot persistence and CI bounds. Committed `6aedeaf`. 31 tests pass.
-- **Task 4.1**: Complete. Implemented WorkerScheduler with APScheduler jobs (ingest_crypto, ingest_equities, retrain_nightly, evaluate_hourly, heartbeat). Committed `e58e862`. 35 tests pass.
+- **Task 4.1**: Complete. Implemented WorkerScheduler with APScheduler jobs. Committed `e58e862`. 35 tests pass.
+- **Task 4.2**: Complete. Implemented EvaluatorService and AccuracyService. Committed `242d81c`. 42 tests pass.
+- **Task 5.1**: Complete. Implemented LinkMonitor (RTT p50/p95/jitter, error rate, quota tracking). Committed `9530988`. 49 tests pass.
+- **Task 5.2**: Complete. Implemented CircuitBreaker state machine (closed -> open -> half_open -> closed). Committed `55fe358`. 52 tests pass.
+- **Task 5.3**: Complete. Implemented HealthChecker (8 health checks + compute_system_status). Committed `66357d7`. 63 tests pass.
+- **Task 6.1**: Complete. Implemented CoinGeckoProvider and CoinbaseProvider for crypto data. Committed `5579faa`. 80 tests pass.
+- **Task 6.2**: Complete. Implemented Streamlit app scaffold (`app.py`), watchlist management, and price chart scaffold. Committed `cf223e0`. 81 tests pass.
+
+---
+
+## Handoff Block for Toby (M7–M10)
+
+- **Current Repo HEAD**: `cf223e0` (`feat(M6.2): Streamlit app scaffold — watchlist + price chart + overlay`)
+- **Total Test Count**: 81/81 passed (5.89s test suite runtime)
+- **Completed Tasks**: Tasks 0.1 through 6.2 (Milestones M0, M1, M2, M3, M4, M5, M6 complete)
+- **Open Tasks (M7–M10)**:
+  1. `Task 7.1`: Accuracy panel + Explain panel
+  2. `Task 7.2`: Health panel
+  3. `Task 8.1`: TiingoProvider + FinnhubProvider (equity fallbacks)
+  4. `Task 8.2`: Wire CircuitBreaker into IngestionService failover
+  5. `Task 9.1`: DydxDerivativesProvider (funding rate + open interest)
+  6. `Task 9.2`: Add 4 crypto-only features to FeatureBuilder
+  7. `Task 10.1`: Chaos test suite
+  8. `Task 10.2`: README + ARCHITECTURE + API docs + v1.0.0
+  9. `Task 10.3`: Multi-week live run verification + handoff
+- **Ribbon Overlay Feasibility Ruling (god)**: Use Plotly (`st.plotly_chart` via `go.Scatter(fill='tonexty')`) for price/overlay/ribbon chart rendering. Drop `streamlit-lightweight-charts`. NO React pivot. Toby executes this in M7.
+
+
+
 
 
 

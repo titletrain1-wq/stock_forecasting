@@ -1150,6 +1150,19 @@ wheels = [
 ]
 
 [[package]]
+name = "plotly"
+version = "7.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "narwhals" },
+    { name = "packaging" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ec/9e/8894e8eae20a5b2a44aa568b1d2d80291e8eea6ce7bc75cdc7a152aef0ac/plotly-7.0.0.tar.gz", hash = "sha256:08b21f1244a97e7a1a699833c4bb2678475aa108b3f1989886ed0b038ebfd849", size = 6218668, upload-time = "2026-08-25T17:47:29.088Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e0/2f/6f492108d9955bac97979d9949c1b35eab30fc630b1f22bbdd2c7cacbab4/plotly-7.0.0-py3-none-any.whl", hash = "sha256:78cbf7bd06d1b05bb3b8ec1b709864695229b55151b6f7530fbf55517ead6fdd", size = 9052859, upload-time = "2026-08-25T17:47:24.689Z" },
+]
+
+[[package]]
 name = "pluggy"
 version = "1.6.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1774,11 +1787,11 @@ dependencies = [
     { name = "pandas" },
     { name = "pandas-market-calendars" },
     { name = "pandas-ta" },
+    { name = "plotly" },
     { name = "pydantic-settings" },
     { name = "scikit-learn" },
     { name = "sqlmodel" },
     { name = "streamlit" },
-    { name = "streamlit-lightweight-charts" },
     { name = "tenacity" },
     { name = "yfinance" },
 ]
@@ -1799,11 +1812,11 @@ requires-dist = [
     { name = "pandas", specifier = ">=2.0" },
     { name = "pandas-market-calendars", specifier = ">=4.1" },
     { name = "pandas-ta", specifier = ">=0.3.14b0" },
+    { name = "plotly", specifier = ">=7.0.0" },
     { name = "pydantic-settings", specifier = ">=2.0" },
     { name = "scikit-learn", specifier = ">=1.3" },
     { name = "sqlmodel", specifier = ">=0.0.14" },
     { name = "streamlit", specifier = ">=1.28" },
-    { name = "streamlit-lightweight-charts", specifier = ">=0.5" },
     { name = "tenacity", specifier = ">=8.2" },
     { name = "yfinance", specifier = ">=1.7.0" },
 ]
@@ -1845,18 +1858,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/50/94/928c44a8b7bcd602fc4a16025e9868bcdb88b92bcdb2e53dec188d034fc4/streamlit-1.62.0.tar.gz", hash = "sha256:9d2571da6e6799cbaf0f59548f5773926260a87a69807cf3e2f0f68f9f5e4d45", size = 9883501, upload-time = "2026-08-19T18:31:22.864Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/2b/57/78864764c53885db8a378cc1c47329b4b6e095f7ebd89cd1ffcca4027c89/streamlit-1.62.0-py3-none-any.whl", hash = "sha256:294dbcfe0d6531b0d8593a095e6872dcc6ec4b731723fbb318a0f8102e69162e", size = 10490146, upload-time = "2026-08-19T18:31:19.957Z" },
-]
-
-[[package]]
-name = "streamlit-lightweight-charts"
-version = "0.7.20"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "streamlit" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/7e/51/4a1b5c968746baf403845e4dc58d0e4c789f0a4274a690b06d1f11e073a2/streamlit-lightweight-charts-0.7.20.tar.gz", hash = "sha256:1341348b8286c23975246b391956295c70cb315c06eaec9a51b31e5bcf774ef5", size = 661775, upload-time = "2023-05-22T17:16:02.799Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/95/d1/adc3380ab8f92c7c89516a562186349a61cf063a931e88811398fccd2024/streamlit_lightweight_charts-0.7.20-py3-none-any.whl", hash = "sha256:61e0edc669dac626176a16da173414f577161f28107a3475762640d5665c7fe4", size = 669339, upload-time = "2023-05-22T17:15:59.81Z" },
 ]
 
 [[package]]
