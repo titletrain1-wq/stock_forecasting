@@ -140,7 +140,7 @@ class ForecastService:
                     f"Unsupported horizon '{horizon}'. Must be one of {list(self.HORIZON_DAYS.keys())}"
                 )
             h_days = self.HORIZON_DAYS[horizon]
-            target_ts = (made_dt + pd.Timedelta(days=h_days)).isoformat()
+            target_ts = self._compute_target_ts(ticker, made_from_ts, horizon)
 
             for model_type in model_types:
                 norm_model_type = model_type.lower()
@@ -294,6 +294,24 @@ class ForecastService:
             model_types=[model_type],
         )
         return results[f"{horizon}_{model_type.lower()}"]
+
+    def _compute_target_ts(self, ticker: str, made_from_ts: str, horizon: str) -> str:
+        from stock_forecasting.schema import Ticker
+        h_days = self.HORIZON_DAYS[horizon]
+        made_dt = pd.to_datetime(made_from_ts, utc=True)
+        
+        ticker_obj = self.session.get(Ticker, ticker)
+        asset_class = ticker_obj.asset_class if ticker_obj else "equity"
+        
+        if asset_class == "equity":
+            # Add business days
+            target_dt = made_dt + pd.offsets.BDay(h_days)
+            # if made_dt was already on a weekend, BDay(h_days) might not behave exactly intuitively, 
+            # but it is a standard approach. 
+        else:
+            target_dt = made_dt + pd.Timedelta(days=h_days)
+            
+        return target_dt.isoformat()
 
 
 Forecaster = ForecastService

@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import Ridge
+from sklearn.model_selection import TimeSeriesSplit
 from sklearn.preprocessing import StandardScaler
 from sqlmodel import Session, select
 
@@ -167,57 +168,64 @@ class Trainer:
                 f"(minimum {min_required_samples} required after feature warmup and target shift)."
             )
 
-        # 4. Perform walk-forward split (80% train, 20% OOS test)
-        n_samples = len(valid_df)
-        train_size = int(n_samples * 0.8)
-        if train_size < 4 or (n_samples - train_size) < 1:
-            raise ValueError(
-                f"Insufficient samples to create train/test split: total={n_samples}, train={train_size}."
-            )
-
-        train_df = valid_df.iloc[:train_size]
-        test_df = valid_df.iloc[train_size:]
-
         feature_cols = [
             c for c in self.feature_builder.feature_cols
             if c in valid_df.columns and c != "ts"
         ]
 
-        X_train = train_df[feature_cols].values
-        y_train = train_df[target_col].values
-        X_test = test_df[feature_cols].values
-        y_test = test_df[target_col].values
+        X_full = valid_df[feature_cols].values
+        y_full = valid_df[target_col].values
+        
+        n_splits = 5
+        if len(valid_df) < n_splits * 2:
+            n_splits = max(2, len(valid_df) // 2)
 
-        # Scale features using train set statistics only (Zero Lookahead)
-        wf_scaler = StandardScaler()
-        X_train_scaled = wf_scaler.fit_transform(X_train)
-        X_test_scaled = wf_scaler.transform(X_test)
+        tscv = TimeSeriesSplit(n_splits=n_splits)
+        y_pred_all = []
+        y_test_all = []
 
-        # 5. Fit walk-forward model
         if norm_model_type == "ridge":
             hyperparams: dict[str, Any] = {"alpha": 1.0}
-            wf_model = Ridge(alpha=1.0)
         else:
             hyperparams = {"n_estimators": 100, "random_state": random_seed}
-            wf_model = RandomForestRegressor(n_estimators=100, random_state=random_seed)
 
-        wf_model.fit(X_train_scaled, y_train)
+        for train_index, test_index in tscv.split(X_full):
+            X_train, X_test = X_full[train_index], X_full[test_index]
+            y_train, y_test = y_full[train_index], y_full[test_index]
 
-        # 6. Compute OOS walk-forward metrics
-        y_pred = wf_model.predict(X_test_scaled)
-        wf_mae = float(np.mean(np.abs(y_test - y_pred)))
-        wf_rmse = float(np.sqrt(np.mean((y_test - y_pred) ** 2)))
-        wf_dir_acc = float(np.mean(np.sign(y_pred) == np.sign(y_test)))
+            wf_scaler = StandardScaler()
+            X_train_scaled = wf_scaler.fit_transform(X_train)
+            X_test_scaled = wf_scaler.transform(X_test)
 
-        residuals = y_test - y_pred
+            if norm_model_type == "ridge":
+                wf_model = Ridge(alpha=1.0)
+            else:
+                wf_model = RandomForestRegressor(n_estimators=100, random_state=random_seed)
+
+            wf_model.fit(X_train_scaled, y_train)
+            y_pred = wf_model.predict(X_test_scaled)
+
+            y_pred_all.extend(y_pred)
+            y_test_all.extend(y_test)
+
+        y_pred_all = np.array(y_pred_all)
+        y_test_all = np.array(y_test_all)
+
+        wf_mae = float(np.mean(np.abs(y_test_all - y_pred_all)))
+        wf_rmse = float(np.sqrt(np.mean((y_test_all - y_pred_all) ** 2)))
+        wf_dir_acc = float(np.mean(np.sign(y_pred_all) == np.sign(y_test_all)))
+
+        residuals = y_test_all - y_pred_all
         residual_std = float(np.std(residuals, ddof=1)) if len(residuals) > 1 else float(np.std(residuals))
+        
+        scaled_std = residual_std * np.sqrt(h)
 
-        if residual_std > 1e-12:
-            ci_lower = y_pred - 1.96 * residual_std
-            ci_upper = y_pred + 1.96 * residual_std
-            wf_ci_cov = float(np.mean((y_test >= ci_lower) & (y_test <= ci_upper)))
+        if scaled_std > 1e-12:
+            ci_lower = y_pred_all - 1.96 * scaled_std
+            ci_upper = y_pred_all + 1.96 * scaled_std
+            wf_ci_cov = float(np.mean((y_test_all >= ci_lower) & (y_test_all <= ci_upper)))
         else:
-            wf_ci_cov = 1.0 if len(y_test) > 0 else 0.0
+            wf_ci_cov = 1.0 if len(y_test_all) > 0 else 0.0
 
         # Fit production model on entire valid dataset with full scaler
         prod_scaler = StandardScaler()

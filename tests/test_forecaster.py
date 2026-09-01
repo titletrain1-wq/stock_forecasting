@@ -138,8 +138,33 @@ def test_forecaster_target_ts_calculation(db_session: Session, tmp_path: Path) -
         res = results[f"{h}_ridge"]
         made_dt = pd.to_datetime(res.made_from_ts, utc=True)
         target_dt = pd.to_datetime(res.target_ts, utc=True)
-        diff_days = (target_dt - made_dt).total_seconds() / 86400
-        assert diff_days == pytest.approx(days)
+        # For equity, it uses BDay
+        expected_target_dt = made_dt + pd.offsets.BDay(days)
+        assert target_dt == expected_target_dt
+
+def test_forecaster_target_ts_crypto(db_session: Session, tmp_path: Path) -> None:
+    """Verify target_ts is correctly offset by horizon days for crypto."""
+    ticker = "BTC"
+    from stock_forecasting.schema import Ticker
+    db_session.add(Ticker(symbol=ticker, asset_class="crypto", display_name="Bitcoin", provider="ccxt", provider_symbol="BTC/USD", price_basis="raw", added_at="2026-09-01T00:00:00Z"))
+    db_session.commit()
+    _insert_sample_bars(db_session, ticker=ticker, n=100)
+
+    trainer = Trainer(session=db_session, model_dir=tmp_path)
+    trainer.train(ticker=ticker, horizon="5d", model_type="ridge")
+
+    service = ForecastService(session=db_session, model_dir=tmp_path)
+    results = service.generate_and_persist(
+        ticker=ticker,
+        horizons=["5d"],
+        model_types=["ridge"],
+    )
+
+    res = results["5d_ridge"]
+    made_dt = pd.to_datetime(res.made_from_ts, utc=True)
+    target_dt = pd.to_datetime(res.target_ts, utc=True)
+    diff_days = (target_dt - made_dt).total_seconds() / 86400
+    assert diff_days == pytest.approx(5)
 
 
 def test_forecaster_random_forest(db_session: Session, tmp_path: Path) -> None:

@@ -4,6 +4,7 @@ Includes explicit table names (__tablename__) and foreign keys matching
 the system architecture specification.
 """
 
+from sqlalchemy import Index, UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 
@@ -26,6 +27,7 @@ class OhlcvBar(SQLModel, table=True):
     """Historical and ingested OHLCV price bars."""
 
     __tablename__ = "ohlcv_bars"
+    __table_args__ = (UniqueConstraint("ticker", "interval", "ts", name="uq_ohlcv_bar"),)
 
     id: int | None = Field(default=None, primary_key=True)
     ticker: str = Field(foreign_key="tickers.symbol")
@@ -71,6 +73,10 @@ class PredictionSnapshot(SQLModel, table=True):
     """Immutable ledger of forecasts and post-realization evaluations."""
 
     __tablename__ = "prediction_snapshots"
+    __table_args__ = (
+        Index("ix_prediction_snapshots_lookup", "ticker", "horizon", "model_type", "made_at"),
+        Index("ix_prediction_snapshots_target_ts", "target_ts"),
+    )
 
     prediction_id: str = Field(primary_key=True)  # UUID
     ticker: str
@@ -103,6 +109,9 @@ class AccuracyRecord(SQLModel, table=True):
     """Cached rolling accuracy and evaluation metrics."""
 
     __tablename__ = "accuracy_records"
+    __table_args__ = (
+        UniqueConstraint("scope", "ticker", "horizon", "model_type", "window", name="uq_accuracy_record"),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     scope: str  # "ticker" | "global"
@@ -183,6 +192,7 @@ class CryptoDerivative(SQLModel, table=True):
     """Crypto derivative metrics (funding rate, open interest)."""
 
     __tablename__ = "crypto_derivatives"
+    __table_args__ = (UniqueConstraint("ticker", "ts", name="uq_crypto_derivative"),)
 
     id: int | None = Field(default=None, primary_key=True)
     ticker: str = Field(foreign_key="tickers.symbol")

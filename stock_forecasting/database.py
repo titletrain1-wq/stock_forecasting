@@ -18,6 +18,32 @@ def create_tables(engine: Engine) -> None:
     with engine.begin() as conn:
         conn.execute(text("PRAGMA journal_mode=WAL"))
         conn.execute(text("PRAGMA busy_timeout=5000"))
+        
+        # Enforce prediction snapshot immutability
+        trigger_sql = """
+        CREATE TRIGGER IF NOT EXISTS enforce_snapshot_immutability
+        BEFORE UPDATE ON prediction_snapshots
+        BEGIN
+            SELECT RAISE(ABORT, 'Prediction columns are immutable')
+            WHERE OLD.prediction_id != NEW.prediction_id
+               OR OLD.ticker != NEW.ticker
+               OR OLD.made_at != NEW.made_at
+               OR OLD.made_from_ts != NEW.made_from_ts
+               OR OLD.anchor_price != NEW.anchor_price
+               OR OLD.horizon != NEW.horizon
+               OR OLD.target_ts != NEW.target_ts
+               OR OLD.predicted_return != NEW.predicted_return
+               OR OLD.predicted_price != NEW.predicted_price
+               OR OLD.lower_bound != NEW.lower_bound
+               OR OLD.upper_bound != NEW.upper_bound
+               OR OLD.model_type != NEW.model_type
+               OR OLD.model_version != NEW.model_version
+               OR OLD.model_run_id != NEW.model_run_id
+               OR OLD.explain_json != NEW.explain_json
+               OR OLD.input_is_stale != NEW.input_is_stale;
+        END;
+        """
+        conn.execute(text(trigger_sql))
 
 
 def get_engine(db_path: str | None = None) -> Engine:

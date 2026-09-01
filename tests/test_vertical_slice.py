@@ -1,13 +1,17 @@
-import pytest
-from stock_forecasting.database import create_tables
-from stock_forecasting.schema import Ticker, PredictionSnapshot, AccuracyRecord, OhlcvBar
-from stock_forecasting.providers.fake import FakeProvider
-from stock_forecasting.ingestion import IngestionService
-from stock_forecasting.trainer import Trainer
-from stock_forecasting.forecaster import ForecastService
-from stock_forecasting.evaluator import EvaluatorService
 from sqlmodel import Session, select
-from datetime import date, datetime, timedelta, timezone
+
+from stock_forecasting.evaluator import EvaluatorService
+from stock_forecasting.forecaster import ForecastService
+from stock_forecasting.ingestion import IngestionService
+from stock_forecasting.providers.fake import FakeProvider
+from stock_forecasting.schema import (
+    AccuracyRecord,
+    OhlcvBar,
+    PredictionSnapshot,
+    Ticker,
+)
+from stock_forecasting.trainer import Trainer
+
 
 def test_full_vertical_slice(temp_db):
     """End-to-end integration test of the vertical slice (M0-M4)."""
