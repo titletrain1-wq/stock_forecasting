@@ -19,7 +19,9 @@ from sqlmodel import Session, select
 
 from stock_forecasting.market_calendar import classify_bar_freshness
 from stock_forecasting.schema import (
+    IntradayBar,
     LinkMetrics,
+    LiveQuote,
     OhlcvBar,
     QuarantineBar,
     SystemHeartbeat,
@@ -79,7 +81,10 @@ class HealthChecker:
         for ticker in tickers:
             latest_bar = self.session.exec(
                 select(OhlcvBar)
-                .where(OhlcvBar.ticker == ticker.symbol)
+                .where(
+                    OhlcvBar.ticker == ticker.symbol,
+                    OhlcvBar.interval == "1d",
+                )
                 .order_by(OhlcvBar.ts.desc())
                 .limit(1)
             ).first()
@@ -416,22 +421,186 @@ class HealthChecker:
 
         return HealthCheckResult("quota", status, msg, details)
 
+    def check_live_feed_crypto(self, now: datetime | None = None) -> HealthCheckResult:
+        """Check status of crypto live quotes feed (<10s NOMINAL, 10-90s DEGRADED, >90s CRITICAL)."""
+        current_time = now or datetime.now(UTC)
+        quotes = self.session.exec(
+            select(LiveQuote).where(LiveQuote.source.like("coinbase%"))
+        ).all()
+        hb = self.session.get(SystemHeartbeat, "live_feed_crypto")
+
+        if not quotes and hb is None:
+            return HealthCheckResult(
+                check_name="live_feed_crypto",
+                status="NOMINAL",
+                message="Crypto live feed: no quotes recorded yet.",
+            )
+
+        newest_received = None
+        for q in quotes:
+            try:
+                dt = _parse_utc(q.received_at)
+                if newest_received is None or dt > newest_received:
+                    newest_received = dt
+            except (ValueError, TypeError):
+                continue
+
+        if newest_received is None:
+            age_sec = 999999.0
+        else:
+            age_sec = (current_time - newest_received).total_seconds()
+
+        hb_fresh = True
+        if hb is not None:
+            try:
+                hb_dt = _parse_utc(hb.last_pulse_ts)
+                if (
+                    current_time - hb_dt
+                ).total_seconds() > 120.0 or hb.consecutive_failures > 0:
+                    hb_fresh = False
+            except (ValueError, TypeError):
+                hb_fresh = False
+
+        if age_sec < 10.0 and hb_fresh:
+            status = "NOMINAL"
+            msg = f"Crypto live feed nominal ({age_sec:.1f}s ago)."
+        elif age_sec <= 90.0 and hb_fresh:
+            status = "DEGRADED"
+            msg = f"Crypto live feed degraded (age {age_sec:.1f}s)."
+        else:
+            status = "CRITICAL"
+            msg = f"Crypto live feed critical: age {age_sec:.1f}s, WebSocket and REST failing."
+
+        return HealthCheckResult(
+            check_name="live_feed_crypto",
+            status=status,
+            message=msg,
+            details={"age_sec": age_sec, "hb_fresh": hb_fresh},
+        )
+
+    def check_live_feed_equity(self, now: datetime | None = None) -> HealthCheckResult:
+        """Check status of 15m-delayed equity intraday feed (<25m NOMINAL, 25-45m DEGRADED, >45m CRITICAL)."""
+        current_time = now or datetime.now(UTC)
+        bars = self.session.exec(
+            select(IntradayBar)
+            .where(IntradayBar.source == "yfinance_intraday")
+            .order_by(IntradayBar.ts.desc())
+        ).all()
+
+        if not bars:
+            return HealthCheckResult(
+                check_name="live_feed_equity",
+                status="NOMINAL",
+                message="Equity intraday feed: no intraday bars recorded yet.",
+            )
+
+        newest_dt = None
+        for b in bars:
+            try:
+                dt = _parse_utc(b.ts)
+                if newest_dt is None or dt > newest_dt:
+                    newest_dt = dt
+            except (ValueError, TypeError):
+                continue
+
+        if newest_dt is None:
+            age_min = 999999.0
+        else:
+            age_min = (current_time - newest_dt).total_seconds() / 60.0
+
+        if age_min < 25.0:
+            status = "NOMINAL"
+            msg = f"Equity intraday feed nominal ({age_min:.1f}m ago)."
+        elif age_min <= 45.0:
+            status = "DEGRADED"
+            msg = f"Equity intraday feed degraded (age {age_min:.1f}m)."
+        else:
+            status = "CRITICAL"
+            msg = f"Equity intraday feed critical (age {age_min:.1f}m >2 missed poll windows)."
+
+        return HealthCheckResult(
+            check_name="live_feed_equity",
+            status=status,
+            message=msg,
+            details={"age_min": age_min},
+        )
+
+    def check_ws_connection(self, now: datetime | None = None) -> HealthCheckResult:
+        """Check status of WebSocket client from system heartbeat."""
+        hb = self.session.get(SystemHeartbeat, "live_feed_crypto")
+        if hb is None:
+            return HealthCheckResult(
+                check_name="ws_connection",
+                status="NOMINAL",
+                message="WebSocket connection status: no heartbeat recorded yet.",
+            )
+
+        if hb.consecutive_failures > 0 or hb.last_error is not None:
+            status = "DEGRADED"
+            msg = f"WebSocket reconnecting/degraded: {hb.last_error or 'failures reported'}"
+        else:
+            status = "NOMINAL"
+            msg = "WebSocket connected."
+
+        return HealthCheckResult(
+            check_name="ws_connection",
+            status=status,
+            message=msg,
+        )
+
+    def check_intraday_prune(self, now: datetime | None = None) -> HealthCheckResult:
+        """Check that intraday retention prune job ran within the last 26 hours."""
+        current_time = now or datetime.now(UTC)
+        hb = self.session.get(SystemHeartbeat, "job_prune_intraday")
+        if hb is None:
+            return HealthCheckResult(
+                check_name="intraday_prune",
+                status="NOMINAL",
+                message="Intraday prune job: no run record yet.",
+            )
+
+        try:
+            pulse_dt = _parse_utc(hb.last_pulse_ts)
+            age_hours = (current_time - pulse_dt).total_seconds() / 3600.0
+            if age_hours > 26.0 or hb.consecutive_failures > 0:
+                status = "DEGRADED"
+                msg = f"Intraday prune job stale or failed (age {age_hours:.1f}h)."
+            else:
+                status = "NOMINAL"
+                msg = f"Intraday prune job healthy ({age_hours:.1f}h ago)."
+        except (ValueError, TypeError):
+            status = "DEGRADED"
+            msg = "Intraday prune job timestamp invalid."
+
+        return HealthCheckResult(
+            check_name="intraday_prune",
+            status=status,
+            message=msg,
+        )
+
     def compute_system_status(
-        self, now: datetime | None = None
+        self,
+        now: datetime | None = None,
+        display_only_checks: set[str] | None = None,
     ) -> tuple[str, list[str]]:
-        """Compute the overarching system health status from all 8 health checks.
+        """Compute overarching system health status from all checks.
 
-        Status levels according to specification:
-        - NOMINAL: All providers responding, worker heartbeat < 5m, 0 quarantined rows in 24h.
-        - DEGRADED: 1 provider degraded/down, worker lag 5-15m, or quota > 80%.
-        - CRITICAL: All primary providers down, worker lag > 15m, or DB failure.
-
-        Args:
-            now: Optional UTC datetime override (defaults to current time).
-
-        Returns:
-            Tuple of (status_string, list_of_warning_messages).
+        Display-path health checks (live feeds, ws_connection, prune job) can
+        contribute at most DEGRADED status to system status, ensuring a live feed
+        outage never marks the training/prediction core as CRITICAL.
         """
+        if display_only_checks is None:
+            display_only_checks = {
+                "live_feed_crypto",
+                "live_feed_equity",
+                "ws_connection",
+                "intraday_prune",
+                "check_live_feed_crypto",
+                "check_live_feed_equity",
+                "check_ws_connection",
+                "check_intraday_prune",
+            }
+
         try:
             checks = [
                 self.check_watchdog(now=now),
@@ -442,6 +611,10 @@ class HealthChecker:
                 self.check_latency(),
                 self.check_gaps(),
                 self.check_clock(now=now),
+                self.check_live_feed_crypto(now=now),
+                self.check_live_feed_equity(now=now),
+                self.check_ws_connection(now=now),
+                self.check_intraday_prune(now=now),
             ]
         except Exception as exc:  # noqa: BLE001
             return ("CRITICAL", [f"Database or system failure: {exc}"])
@@ -451,9 +624,14 @@ class HealthChecker:
         is_degraded = False
 
         for res in checks:
+            is_display_only = res.check_name in display_only_checks
             if res.status == "CRITICAL":
-                is_critical = True
-                warnings.append(f"[{res.check_name.upper()}] {res.message}")
+                if is_display_only:
+                    is_degraded = True
+                    warnings.append(f"[{res.check_name.upper()}] {res.message}")
+                else:
+                    is_critical = True
+                    warnings.append(f"[{res.check_name.upper()}] {res.message}")
             elif res.status == "DEGRADED":
                 is_degraded = True
                 warnings.append(f"[{res.check_name.upper()}] {res.message}")

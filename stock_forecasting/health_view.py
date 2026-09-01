@@ -73,6 +73,15 @@ class WatchdogRow:
 
 
 @dataclass
+class LiveFeedRow:
+    """Status summary for a real-time display feed."""
+
+    label: str
+    badge: str
+    detail: str
+
+
+@dataclass
 class HealthView:
     """Everything the health panel renders."""
 
@@ -83,6 +92,7 @@ class HealthView:
     data_quality_pct: int = 100
     providers: list[ProviderCard] = field(default_factory=list)
     watchdog: list[WatchdogRow] = field(default_factory=list)
+    live_feed_rows: list[LiveFeedRow] = field(default_factory=list)
     pending_evals: int = 0
 
 
@@ -162,12 +172,58 @@ def _data_quality_pct(session: Session, now: datetime) -> int:
     return max(0, 100 - 5 * len(recent))
 
 
+def _live_feed_rows(checker: HealthChecker, now: datetime) -> list[LiveFeedRow]:
+    rows: list[LiveFeedRow] = []
+    res_crypto = checker.check_live_feed_crypto(now=now)
+    badge_crypto = STATUS_BADGE.get(res_crypto.status, res_crypto.status)
+    rows.append(
+        LiveFeedRow(
+            label="Crypto Live Feed",
+            badge=badge_crypto,
+            detail=res_crypto.message,
+        )
+    )
+
+    res_equity = checker.check_live_feed_equity(now=now)
+    badge_equity = STATUS_BADGE.get(res_equity.status, res_equity.status)
+    rows.append(
+        LiveFeedRow(
+            label="Equity Intraday Feed",
+            badge=badge_equity,
+            detail=res_equity.message,
+        )
+    )
+
+    res_ws = checker.check_ws_connection(now=now)
+    badge_ws = STATUS_BADGE.get(res_ws.status, res_ws.status)
+    rows.append(
+        LiveFeedRow(
+            label="Coinbase WebSocket",
+            badge=badge_ws,
+            detail=res_ws.message,
+        )
+    )
+
+    res_prune = checker.check_intraday_prune(now=now)
+    badge_prune = STATUS_BADGE.get(res_prune.status, res_prune.status)
+    rows.append(
+        LiveFeedRow(
+            label="Intraday Prune Job",
+            badge=badge_prune,
+            detail=res_prune.message,
+        )
+    )
+
+    return rows
+
+
 def build_health_view(session: Session, now: datetime | None = None) -> HealthView:
     """Compute the full health-panel view model."""
     current = now or datetime.now(UTC)
     checker = HealthChecker(session)
     status, warnings = checker.compute_system_status(now=current)
     watchdog, worker_label = _watchdog_rows(session, current)
+    live_rows = _live_feed_rows(checker, current)
 
     return HealthView(
         status=status,
@@ -177,5 +233,6 @@ def build_health_view(session: Session, now: datetime | None = None) -> HealthVi
         data_quality_pct=_data_quality_pct(session, current),
         providers=_provider_cards(session),
         watchdog=watchdog,
+        live_feed_rows=live_rows,
         pending_evals=_pending_evals(session, current),
     )
