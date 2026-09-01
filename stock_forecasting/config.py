@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     # from Coinbase's keyless WebSocket, equities poll yfinance intraday (~15min
     # delayed). None of this feeds training or the forecast ledger.
     live_ws_enabled: bool = True
-    coinbase_ws_url: str = "wss://ws-feed.exchange.coinbase.com"
+    coinbase_ws_url: str = "wss://advanced-trade-ws.coinbase.com"
     ws_idle_timeout_sec: int = 90  # no tick/heartbeat this long -> REST fallback
     intraday_equity_interval: str = "5m"
     intraday_poll_equity_min: int = 5

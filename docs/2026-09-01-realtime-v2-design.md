@@ -37,14 +37,20 @@ v2 adds a real-time-capable **display layer** on top of the unchanged daily ML c
 
 ### 1.1 Crypto — Coinbase WebSocket (real-time, keyless)
 
+> **M1 spike update (2026-09-01)**: the live keyless probe
+> (`docs/spikes/2026-09-01-M1-coinbase-ws.md`) moved the endpoint from the classic
+> exchange feed to the Advanced Trade feed, because `ticker_batch` is an
+> Advanced-Trade channel and the classic `wss://ws-feed.exchange.coinbase.com`
+> does not serve it. The table below reflects the spike's decision.
+
 | Item | Value |
 |---|---|
-| Endpoint | `wss://ws-feed.exchange.coinbase.com` (public exchange feed) |
+| Endpoint | `wss://advanced-trade-ws.coinbase.com` (Advanced Trade feed) |
 | Auth | none — keyless for public channels, confirmed 2026 |
-| Channels | `ticker_batch` (batched price ticks, ~5s on change) + `heartbeats` (**mandatory** — server drops an idle connection after 60s) |
-| Subscribe | `{"type":"subscribe","product_ids":["BTC-USD","ETH-USD"],"channels":["ticker_batch","heartbeats"]}` |
+| Channels | `ticker_batch` (batched price ticks, ~5s on change) + `heartbeats` (keepalive for quiet products) |
+| Subscribe | one message per channel (`channel` singular): `{"type":"subscribe","product_ids":["BTC-USD","ETH-USD"],"channel":"ticker_batch"}` then `...,"channel":"heartbeats"}` |
 | Limits | 100 subscriptions per IP connection |
-| Client | `websocket-client` (`WebSocketApp` callback model) on a single background daemon thread |
+| Client | `websockets` (already locked; async loop on a single background daemon thread) |
 
 **Ownership**: `worker.py` owns exactly one WebSocket connection (Meredith Q2, option A). Browser
 tabs never open sockets. The thread pushes the newest tick per product into a thread-safe in-memory
@@ -299,7 +305,7 @@ Nothing structural. `poll_interval_equity_min` (hourly daily-bar poll) is **reta
 
 ```
 LIVE_WS_ENABLED=true
-COINBASE_WS_URL=wss://ws-feed.exchange.coinbase.com
+COINBASE_WS_URL=wss://advanced-trade-ws.coinbase.com
 WS_IDLE_TIMEOUT_SEC=90                 # no tick/heartbeat this long -> REST fallback
 INTRADAY_EQUITY_INTERVAL=5m
 INTRADAY_POLL_EQUITY_MIN=5
