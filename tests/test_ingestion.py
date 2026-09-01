@@ -433,3 +433,90 @@ def test_ingestion_service_missing_ticker_or_provider(
     backfill_fail = service.backfill("FAIL")
     assert backfill_fail["inserted"] == 0
     assert "429" in backfill_fail.get("error", "")
+
+
+class _AlwaysFailProvider:
+    """Provider that raises on every call (simulates a downed upstream)."""
+
+    def get_daily_history(self, symbol, start, end):
+        raise RuntimeError("HTTP 503: upstream down")
+
+    def get_latest_bars(self, symbol, lookback=5):
+        raise RuntimeError("HTTP 503: upstream down")
+
+
+def test_poll_ticker_fails_over_to_fallback_when_primary_breaker_open(
+    db_session: Session,
+) -> None:
+    """yfinance breaker trips after 5 failures -> poll_ticker serves via tiingo."""
+    _create_sample_ticker(db_session, "AAPL")  # provider="yfinance"
+
+    service = IngestionService(
+        session=db_session,
+        providers={"yfinance": _AlwaysFailProvider(), "tiingo": FakeProvider()},
+    )
+
+    from stock_forecasting.schema import LinkMetrics
+
+    # First poll: yfinance raises + records a failure, then fails over to tiingo.
+    first = service.poll_ticker("AAPL")
+    assert first["provider"] == "tiingo"
+    assert first["failover_from"] == "yfinance"
+    assert first["inserted"] > 0
+    bars = db_session.exec(select(OhlcvBar).where(OhlcvBar.ticker == "AAPL")).all()
+    assert bars and all(b.source == "tiingo" for b in bars)
+
+    # 4 more failing yfinance attempts trip its breaker (threshold 5).
+    for _ in range(4):
+        service.poll_ticker("AAPL")
+    yf = db_session.get(LinkMetrics, "yfinance")
+    assert yf.breaker_state == "open"
+
+    # Breaker now open: yfinance skipped outright, still served by tiingo.
+    after = service.poll_ticker("AAPL")
+    assert after["provider"] == "tiingo"
+    assert after["failover_from"] == "yfinance"
+
+
+def test_poll_ticker_records_success_keeps_breaker_closed(db_session: Session) -> None:
+    _create_sample_ticker(db_session, "AAPL")
+    service = IngestionService(
+        session=db_session,
+        providers={"yfinance": FakeProvider()},
+    )
+    res = service.poll_ticker("AAPL")
+    assert res["provider"] == "yfinance"
+    assert "failover_from" not in res
+
+    from stock_forecasting.schema import LinkMetrics
+
+    yf = db_session.get(LinkMetrics, "yfinance")
+    assert yf.breaker_state == "closed"
+    assert yf.consecutive_failures == 0
+
+
+def test_poll_ticker_all_providers_fail_returns_error(db_session: Session) -> None:
+    _create_sample_ticker(db_session, "AAPL")
+    service = IngestionService(
+        session=db_session,
+        providers={
+            "yfinance": _AlwaysFailProvider(),
+            "tiingo": _AlwaysFailProvider(),
+            "finnhub": _AlwaysFailProvider(),
+        },
+    )
+    res = service.poll_ticker("AAPL")
+    assert res["inserted"] == 0
+    assert "503" in res["error"]
+
+
+def test_backfill_fails_over_to_fallback(db_session: Session) -> None:
+    _create_sample_ticker(db_session, "AAPL")
+    service = IngestionService(
+        session=db_session,
+        providers={"yfinance": _AlwaysFailProvider(), "tiingo": FakeProvider()},
+    )
+    res = service.backfill("AAPL", years=1)
+    assert res["provider"] == "tiingo"
+    assert res["failover_from"] == "yfinance"
+    assert res["inserted"] > 300
