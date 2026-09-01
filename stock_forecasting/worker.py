@@ -3,7 +3,7 @@
 import logging
 import os
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from sqlalchemy import Engine
@@ -230,6 +230,92 @@ class WorkerScheduler:
     def job_ingest_equities(self) -> None:
         """Poll and ingest latest market bars for all active equity tickers."""
         self._run_ingest_job("equity", "job_ingest_equities")
+
+    def job_ingest_equity_intraday(self) -> None:
+        """Poll closed 5m intraday bars for active equities and update intraday_bars."""
+        job_type = "job_ingest_equity_intraday"
+        logger.info("Executing %s...", job_type)
+        with Session(self.engine) as session:
+            try:
+                active = session.exec(
+                    select(Ticker).where(
+                        Ticker.asset_class == "equity", Ticker.active == 1
+                    )
+                ).all()
+
+                if not active:
+                    _update_heartbeat(session, job_type, success=True)
+                    return
+
+                provider = self.providers.get("yfinance")
+                if provider is None:
+                    _update_heartbeat(
+                        session,
+                        job_type,
+                        success=False,
+                        error_msg="Provider 'yfinance' not registered",
+                    )
+                    return
+
+                intraday_repo = IntradayRepository(session)
+                now = datetime.now(UTC)
+                errors: list[str] = []
+
+                for ticker in active:
+                    try:
+                        bars = provider.get_intraday_bars(
+                            ticker.symbol,
+                            interval=self.settings.intraday_equity_interval,
+                            lookback_bars=12,
+                        )
+                        for bar in bars:
+                            try:
+                                bar_dt = datetime.fromisoformat(bar.ts)
+                                if bar_dt.tzinfo is None:
+                                    bar_dt = bar_dt.replace(tzinfo=UTC)
+                            except (ValueError, TypeError):
+                                bar_dt = now
+
+                            # Bar is provisional if within 20m (5m bar + 15m delay) of now
+                            is_prov = 1 if (now - bar_dt) < timedelta(minutes=20) else 0
+
+                            intraday_repo.upsert_forming(
+                                ticker=ticker.symbol,
+                                interval=self.settings.intraday_equity_interval,
+                                bucket_ts=bar.ts,
+                                price=bar.close,
+                                volume=bar.volume,
+                                source="yfinance_intraday",
+                            )
+                            if is_prov == 0:
+                                intraday_repo.close_bucket(
+                                    ticker.symbol,
+                                    self.settings.intraday_equity_interval,
+                                    bar.ts,
+                                )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "Error fetching intraday for %s: %s", ticker.symbol, exc
+                        )
+                        errors.append(f"{ticker.symbol}: {exc}")
+
+                if errors and len(errors) == len(active):
+                    _update_heartbeat(
+                        session,
+                        job_type,
+                        success=False,
+                        error_msg="; ".join(errors),
+                    )
+                else:
+                    _update_heartbeat(session, job_type, success=True)
+            except Exception as exc:
+                logger.exception("Error during %s", job_type)
+                _update_heartbeat(
+                    session,
+                    job_type,
+                    success=False,
+                    error_msg=str(exc),
+                )
 
     def job_ingest_derivatives(self) -> None:
         """Refresh crypto funding-rate + open-interest for all active crypto tickers."""
@@ -490,6 +576,14 @@ class WorkerScheduler:
             id="job_ingest_equities",
             replace_existing=True,
         )
+        self.scheduler.add_job(
+            self.job_ingest_equity_intraday,
+            "interval",
+            minutes=self.settings.intraday_poll_equity_min,
+            id="job_ingest_equity_intraday",
+            replace_existing=True,
+        )
+
         self.scheduler.add_job(
             self.job_ingest_derivatives,
             "interval",

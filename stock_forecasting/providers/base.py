@@ -3,6 +3,10 @@ from datetime import date
 from typing import Protocol, runtime_checkable
 
 
+class ProviderError(Exception):
+    """Exception raised for errors in data provider requests."""
+
+
 @dataclass
 class Bar:
     """OHLCV bar."""
