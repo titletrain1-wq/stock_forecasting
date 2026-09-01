@@ -1,13 +1,18 @@
-# stock_forecasting (v1.0.0)
+# stock_forecasting (v1.0.1)
 
-Personal single-user daily stock and cryptocurrency forecast application with an immutable prediction ledger, walk-forward ML models, automated circuit-breaker failover, Plotly interactive visualization, and full system health monitoring.
+Personal single-user **end-of-day** stock and cryptocurrency forecast application with an immutable prediction ledger, walk-forward ML models, automated circuit-breaker failover, Plotly interactive visualization, and full system health monitoring.
+
+> **End-of-day, not real-time.** Every data provider serves daily OHLCV bars.
+> The worker polls hourly (enough to pick up a new daily bar shortly after it
+> appears) and freshness is judged against the trading calendar, not wall-clock
+> minutes. This is not an intraday/streaming trading tool.
 
 ## Features
 
-- **Multi-Asset Support**: Ingestion for US Equities (Yahoo Finance, Tiingo, Finnhub) and Cryptocurrencies (CoinGecko, Coinbase, dYdX).
+- **Multi-Asset Support**: Ingestion for US Equities (Yahoo Finance primary, Tiingo/Finnhub fallback when keyed) and Cryptocurrencies (Coinbase primary — keyless; CoinGecko fallback when keyed; dYdX for derivatives).
 - **Resilient Ingestion**: Automatic provider failover, circuit breaker state machine, boundary validation, and invalid data quarantining.
 - **Zero-Lookahead Feature Engineering**: 17 technical indicators + 4 crypto-only features (funding rate, open interest, weekend volume ratio).
-- **Walk-Forward ML Pipeline**: Ridge Regression & Random Forest models with horizon uncertainty scaling ($\sigma \times \sqrt{h}$).
+- **Walk-Forward ML Pipeline**: Ridge Regression & Random Forest models trained directly on the h-day cumulative log return; the 95% confidence band uses the walk-forward residual standard deviation (already a h-horizon quantity — no extra time scaling).
 - **Immutable Ledger**: SQLite trigger-backed prediction snapshot ledger with automated evaluation against realized prices.
 - **Interactive UI**: Streamlit interface powered by Plotly charts (candles, price overlays, forecast ribbons, accuracy records, explainability maps, system health cards).
 
@@ -22,8 +27,20 @@ cd ~/Desktop/stock_forecasting
 # Install dependencies using uv
 uv sync
 
-# Configure environment variables (optional API keys for Tiingo / Finnhub)
+# Configure environment variables (all optional):
+#   TIINGO_API_KEY / FINNHUB_API_KEY  -> extra equity fallback providers
+#   COINGECKO_API_KEY (Demo key)      -> extra crypto fallback provider
+# With no keys the app still runs: yfinance (equities) + Coinbase (crypto), both keyless.
 cp .env.example .env
+```
+
+### After upgrading
+
+The v1.0.1 confidence-band fix changes model metrics. Regenerate the model
+artifacts once (the nightly retrain job also does this automatically):
+
+```bash
+uv run python -m stock_forecasting.worker   # let job_retrain_nightly run, or
 ```
 
 ### 2. Running the Application
@@ -41,7 +58,7 @@ uv run streamlit run stock_forecasting/app.py
 ### 3. Running Tests & Quality Checks
 
 ```bash
-# Run full test suite (149+ unit & chaos tests)
+# Run full test suite (170+ unit & chaos tests)
 uv run pytest tests/ -v
 
 # Run linter & code formatting check
