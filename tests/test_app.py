@@ -114,3 +114,25 @@ def test_render_panels_no_crash_on_empty_db(temp_db) -> None:
     app.render_accuracy_panel(temp_db, "AAPL")
     app.render_explain_panel(temp_db, "AAPL")
     app.render_health_panel(temp_db)
+
+
+def test_refresh_for_cadence_per_asset_class() -> None:
+    from stock_forecasting import app
+
+    assert app._refresh_for("crypto") == 2
+    assert app._refresh_for("equity") == 15
+
+
+def test_delayed_badge_only_for_equity() -> None:
+    from stock_forecasting import app
+
+    assert "15-min delayed" in app._delayed_badge("equity")
+    assert app._delayed_badge("crypto") == ""
+
+
+def test_load_live_returns_empty_on_empty_db(temp_db) -> None:
+    from stock_forecasting import app
+
+    quotes, intraday = app.load_live(temp_db, "BTC-USD", "crypto")
+    assert quotes == []
+    assert intraday == []

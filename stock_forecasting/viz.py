@@ -23,6 +23,8 @@ import plotly.graph_objects as go
 
 ACTUAL_COLOR = "#2962FF"
 RIBBON_COLOR = "#FF6D00"
+LIVE_COLOR = "#00C853"
+FORMING_COLOR = "rgba(0, 200, 83, 0.9)"
 BAND_FILLCOLOR = "rgba(255, 109, 0, 0.13)"
 HIT_COLOR = "#26A69A"
 MISS_COLOR = "#EF5350"
@@ -38,6 +40,20 @@ class _BarLike(Protocol):
     high: float
     low: float
     close: float
+
+
+class _QuoteLike(Protocol):
+    price: float
+    ts: str
+
+
+class _IntradayBarLike(Protocol):
+    ts: str
+    open: float
+    high: float
+    low: float
+    close: float
+    is_provisional: int
 
 
 class _SnapshotLike(Protocol):
@@ -236,6 +252,10 @@ def build_price_figure(
         "margin": {"l": 50, "r": 20, "t": 50, "b": 40},
         "xaxis": {"rangeslider": {"visible": False}},
         "height": 480,
+        # uirevision keeps zoom / pan / hover state across @st.fragment tick
+        # refreshes (M5 streaming chart) — without it every live update snaps
+        # the view back to the default range.
+        "uirevision": True,
     }
     fig.update_layout(**layout)
 
@@ -250,4 +270,81 @@ def build_price_figure(
             font={"size": 14},
         )
 
+    return fig
+
+
+def add_live_price_line(
+    fig: go.Figure,
+    quotes: Sequence[_QuoteLike],
+    intraday: Sequence[_IntradayBarLike],
+) -> go.Figure:
+    """Overlay the live price line + a forming-candle trace onto ``fig``.
+
+    ``intraday`` is the recent ``intraday_bars`` cache (any order); ``quotes`` is
+    the current ``live_quotes`` point(s) — only the last is used. The forecast
+    ribbon and CI band are untouched: they stay anchored to ``P_close`` (ML core
+    is frozen), and the live price only moves the on-chart line and the forming
+    candle. A no-op when there is nothing live to draw.
+
+    Crypto-EOD caveat (GATE 0 condition 3): crypto trades 24/7 with no real
+    00:00 UTC close, so the "daily close" is only the provider's cutoff bar. The
+    live line -> ribbon-origin handover can therefore show a small step when the
+    provider's daily close differs from the last live tick. Equities (a real
+    16:00 ET close) do not have this. See docs/KNOWN_LIMITATIONS.md §0.
+    """
+    bars = sorted(intraday, key=lambda b: str(b.ts))
+    quote = quotes[-1] if quotes else None
+
+    x: list[str] = [b.ts for b in bars]
+    y: list[float] = [b.close for b in bars]
+    if quote is not None:
+        x.append(quote.ts)
+        y.append(quote.price)
+    if not x:
+        return fig
+
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=y,
+            name="live",
+            mode="lines",
+            line={"color": LIVE_COLOR, "width": 2},
+            hovertemplate="%{x}<br>live %{y:.2f}<extra></extra>",
+            meta={"kind": "live"},
+        )
+    )
+
+    # Forming candle: the latest still-provisional bucket (extended by the newest
+    # tick), or a flat candle at the live quote when no provisional bucket exists
+    # yet. Rendered faded with an is_provisional marker in the hover text.
+    forming = next((b for b in reversed(bars) if int(b.is_provisional) == 1), None)
+    if forming is not None:
+        o, h, low, c = forming.open, forming.high, forming.low, forming.close
+        fx = forming.ts
+        if quote is not None:
+            h, low, c = max(h, quote.price), min(low, quote.price), quote.price
+    elif quote is not None:
+        o = h = low = c = quote.price
+        fx = quote.ts
+    else:
+        return fig
+
+    fig.add_trace(
+        go.Candlestick(
+            x=[fx],
+            open=[o],
+            high=[h],
+            low=[low],
+            close=[c],
+            name="forming",
+            showlegend=False,
+            opacity=0.5,
+            increasing_line_color=FORMING_COLOR,
+            decreasing_line_color=FORMING_COLOR,
+            line={"width": 1},
+            hovertext="forming bucket — provisional (is_provisional=1)",
+            meta={"kind": "forming"},
+        )
+    )
     return fig

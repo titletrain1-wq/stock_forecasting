@@ -13,8 +13,10 @@ from datetime import UTC, datetime, timedelta
 import streamlit as st
 from sqlmodel import Session, select
 
+from stock_forecasting.config import get_settings
 from stock_forecasting.database import get_engine
 from stock_forecasting.health_view import build_health_view
+from stock_forecasting.intraday_store import IntradayRepository, LiveQuoteRepository
 from stock_forecasting.panels import (
     accuracy_rows,
     build_explain_figure,
@@ -27,9 +29,43 @@ from stock_forecasting.schema import (
     PredictionSnapshot,
     Ticker,
 )
-from stock_forecasting.viz import DEFAULT_LATEST_HORIZONS, build_price_figure
+from stock_forecasting.viz import (
+    DEFAULT_LATEST_HORIZONS,
+    add_live_price_line,
+    build_price_figure,
+)
 
 RANGE_DAYS: dict[str, int] = {"1M": 31, "3M": 93, "6M": 186, "1Y": 372}
+
+
+def _refresh_for(asset_class: str) -> int:
+    """Fragment ``run_every`` cadence (seconds) per asset class. Spec §3.2."""
+    s = get_settings()
+    if asset_class == "crypto":
+        return s.live_fragment_refresh_crypto_sec
+    return s.live_fragment_refresh_equity_sec
+
+
+def _delayed_badge(asset_class: str) -> str:
+    """Equity intraday data is ~15 min delayed; crypto is live. Spec §3."""
+    return "" if asset_class == "crypto" else "🟡 15-min delayed"
+
+
+def load_live(
+    engine, symbol: str, asset_class: str
+) -> tuple[list[object], list[object]]:
+    """Return ``([latest live_quote] or [], recent intraday_bars)`` for a symbol.
+
+    Reads only the live display tables — never a provider. Crypto uses 1m
+    buckets, equities the configured intraday interval.
+    """
+    interval = (
+        "1m" if asset_class == "crypto" else get_settings().intraday_equity_interval
+    )
+    with Session(engine) as session:
+        quote = LiveQuoteRepository(session).get(symbol)
+        bars = IntradayRepository(session).get_recent(symbol, interval, limit=180)
+    return ([quote] if quote is not None else [], list(bars))
 
 
 def load_tickers(engine) -> list[Ticker]:
@@ -159,18 +195,32 @@ def render_chart_panel(engine, symbol: str, ticker: Ticker) -> None:
     bars = load_bars(engine, symbol, RANGE_DAYS[range_label])
     snapshots = load_snapshots(engine, symbol)
 
-    render_price_header(symbol, bars)
+    def _live_region() -> None:
+        """Price header + streaming chart — re-executed on the fragment tick.
 
-    fig = build_price_figure(
-        bars,
-        snapshots,
-        ribbon_horizon=None if ribbon_horizon == "(none)" else ribbon_horizon,
-        show_markers=show_markers,
-        show_actual_candles=use_candles,
-        latest_horizons=tuple(latest_horizons),
-        title=f"{symbol} · actual vs forecast",
-    )
-    st.plotly_chart(fig, use_container_width=True)
+        Only this function re-runs (Spec §3.1): the range/overlay controls above
+        and the panels below keep their state and scroll position.
+        """
+        quotes, intraday = load_live(engine, symbol, ticker.asset_class)
+        render_price_header(symbol, bars)
+        badge = _delayed_badge(ticker.asset_class)
+        if badge:
+            st.caption(badge)
+        fig = build_price_figure(
+            bars,
+            snapshots,
+            ribbon_horizon=None if ribbon_horizon == "(none)" else ribbon_horizon,
+            show_markers=show_markers,
+            show_actual_candles=use_candles,
+            latest_horizons=tuple(latest_horizons),
+            title=f"{symbol} · actual vs forecast",
+        )
+        add_live_price_line(fig, quotes, intraday)
+        # Stable key -> Streamlit reuses the existing Plotly canvas instead of
+        # remounting it, so ticks update in place without flicker (Spec §3.1).
+        st.plotly_chart(fig, use_container_width=True, key="live_price_chart")
+
+    st.fragment(_live_region, run_every=_refresh_for(ticker.asset_class))()
 
 
 def render_accuracy_panel(engine, symbol: str) -> None:
