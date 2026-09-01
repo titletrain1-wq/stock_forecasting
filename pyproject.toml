@@ -17,6 +17,7 @@ dependencies = [
     "pandas-ta>=0.3.14b0",
     "joblib>=1.3",
     "pandas-market-calendars>=4.1",
+    "yfinance>=1.7.0",
 ]
 
 [dependency-groups]
