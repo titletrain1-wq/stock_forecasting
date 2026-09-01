@@ -3,13 +3,16 @@
 `poll_ticker` / `backfill` fetch through a per-provider circuit breaker (M5) and
 fail over to a fallback provider when the primary's breaker is open or its call
 raises. `source` on each stored bar records the provider that actually served it.
+
+`poll_derivatives` / `backfill_derivatives` ingest crypto funding rate + open
+interest (dYdX) into `crypto_derivatives` for active crypto tickers.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from sqlmodel import Session, select
@@ -19,7 +22,8 @@ from stock_forecasting.circuit_breaker import (
     CircuitBreaker,
     CircuitBreakerOpenException,
 )
-from stock_forecasting.providers.base import Bar, DataProvider
+from stock_forecasting.crypto_store import CryptoDerivativeStore
+from stock_forecasting.providers.base import Bar, DataProvider, DerivativesProvider
 from stock_forecasting.schema import Ticker
 
 logger = logging.getLogger(__name__)
@@ -43,6 +47,8 @@ class IngestionService:
         providers: dict[str, DataProvider],
         bar_repo: BarRepository | None = None,
         circuit_breaker: CircuitBreaker | None = None,
+        derivatives_provider: DerivativesProvider | None = None,
+        crypto_store: CryptoDerivativeStore | None = None,
     ) -> None:
         """Initialize IngestionService with DB session and providers.
 
@@ -51,12 +57,18 @@ class IngestionService:
             providers: Mapping of provider identifier strings to DataProvider instances.
             bar_repo: Optional BarRepository (defaults to one built from ``session``).
             circuit_breaker: Optional CircuitBreaker (defaults to one built from ``session``).
+            derivatives_provider: Optional crypto derivatives source (e.g. dYdX).
+            crypto_store: Optional CryptoDerivativeStore (defaults to one from ``session``).
         """
         self.session = session
         self.providers = providers
         self.bar_repo = bar_repo if bar_repo is not None else BarRepository(session)
         self.circuit_breaker = (
             circuit_breaker if circuit_breaker is not None else CircuitBreaker(session)
+        )
+        self.derivatives_provider = derivatives_provider
+        self.crypto_store = (
+            crypto_store if crypto_store is not None else CryptoDerivativeStore(session)
         )
 
     def poll_watchlist(self) -> dict[str, dict[str, Any]]:
@@ -179,3 +191,75 @@ class IngestionService:
                 psym, start=start_date, end=end_date
             ),
         )
+
+    # ---- crypto derivatives (funding rate + open interest) -----------------
+
+    def _ingest_derivatives(
+        self, ticker: Ticker, start: date, end: date
+    ) -> dict[str, Any]:
+        if self.derivatives_provider is None:
+            return {
+                "symbol": ticker.symbol,
+                "inserted": 0,
+                "error": "no derivatives provider configured",
+            }
+        if ticker.asset_class != "crypto":
+            return {
+                "symbol": ticker.symbol,
+                "inserted": 0,
+                "error": "not a crypto ticker",
+            }
+        provider_symbol = ticker.provider_symbol or ticker.symbol
+        try:
+            rows = self.derivatives_provider.get_derivatives(
+                provider_symbol, start=start, end=end
+            )
+        except Exception as exc:  # derivatives are non-critical; never break bar ingest
+            logger.exception("Derivatives fetch failed for '%s'", ticker.symbol)
+            return {"symbol": ticker.symbol, "inserted": 0, "error": str(exc)}
+
+        inserted = self.crypto_store.upsert(ticker.symbol, rows, source="dydx")
+        return {"symbol": ticker.symbol, "inserted": inserted, "rows": len(rows)}
+
+    def poll_derivatives(self, symbol: str, lookback_days: int = 45) -> dict[str, Any]:
+        """Refresh recent crypto derivatives for one ticker."""
+        ticker = self._get_ticker(symbol)
+        if ticker is None:
+            return {
+                "symbol": symbol,
+                "inserted": 0,
+                "error": f"Ticker '{symbol}' not found",
+            }
+        end = datetime.now(UTC).date()
+        return self._ingest_derivatives(
+            ticker, end - timedelta(days=lookback_days), end
+        )
+
+    def backfill_derivatives(self, symbol: str, years: int = 3) -> dict[str, Any]:
+        """Backfill crypto derivatives history for one ticker."""
+        ticker = self._get_ticker(symbol)
+        if ticker is None:
+            return {
+                "symbol": symbol,
+                "inserted": 0,
+                "error": f"Ticker '{symbol}' not found",
+            }
+        end = datetime.now(UTC).date()
+        try:
+            start = end.replace(year=end.year - years)
+        except ValueError:
+            start = end.replace(year=end.year - years, day=28)
+        return self._ingest_derivatives(ticker, start, end)
+
+    def poll_all_derivatives(
+        self, lookback_days: int = 45
+    ) -> dict[str, dict[str, Any]]:
+        """Refresh recent derivatives for every active crypto ticker."""
+        if self.derivatives_provider is None:
+            return {}
+        crypto = self.session.exec(
+            select(Ticker).where(Ticker.active == 1, Ticker.asset_class == "crypto")
+        ).all()
+        end = datetime.now(UTC).date()
+        start = end - timedelta(days=lookback_days)
+        return {t.symbol: self._ingest_derivatives(t, start, end) for t in crypto}
