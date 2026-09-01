@@ -69,9 +69,10 @@ def test_session_factory_and_contextmanager(temp_db: sqlalchemy.Engine) -> None:
 
 def test_snapshot_immutability_trigger(temp_db: sqlalchemy.Engine) -> None:
     """Verify prediction columns are immutable but realized columns can be updated."""
-    from stock_forecasting.schema import PredictionSnapshot, ModelRun
-    from sqlalchemy.exc import DatabaseError
     import pytest
+    from sqlalchemy.exc import DatabaseError
+
+    from stock_forecasting.schema import ModelRun, PredictionSnapshot
 
     with get_session(temp_db) as session:
         # Need a ModelRun first to satisfy foreign key

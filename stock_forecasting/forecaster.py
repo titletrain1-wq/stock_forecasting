@@ -128,9 +128,9 @@ class ForecastService:
 
         latest_feature_row = features_df.iloc[-1]
         now_iso = datetime.now(UTC).isoformat()
-        made_dt = pd.to_datetime(made_from_ts, utc=True)
 
         results: dict[str, ForecastResult] = {}
+
         snapshots: list[PredictionSnapshot] = []
 
         # 4. Generate forecasts for each horizon and model type
