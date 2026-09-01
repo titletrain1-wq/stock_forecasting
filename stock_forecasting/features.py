@@ -80,7 +80,9 @@ class FeatureBuilder:
         if "adj_close" in df.columns and df["adj_close"].notna().any():
             adj_close = df["adj_close"].fillna(df["close"]).astype(float)
             raw_close = df["close"].astype(float)
-            adj_factor = (adj_close / raw_close).replace([np.inf, -np.inf], 1.0).fillna(1.0)
+            adj_factor = (
+                (adj_close / raw_close).replace([np.inf, -np.inf], 1.0).fillna(1.0)
+            )
             close = adj_close
             high = df["high"].astype(float) * adj_factor
             low = df["low"].astype(float) * adj_factor
@@ -99,8 +101,16 @@ class FeatureBuilder:
         # 2. Moving average features
         sma20 = ta.sma(close, length=20)
         sma50 = ta.sma(close, length=50)
-        sma20_stretch = (close / sma20) - 1.0 if sma20 is not None else pd.Series(np.nan, index=df.index)
-        sma_crossover = (sma20 / sma50) - 1.0 if sma20 is not None and sma50 is not None else pd.Series(np.nan, index=df.index)
+        sma20_stretch = (
+            (close / sma20) - 1.0
+            if sma20 is not None
+            else pd.Series(np.nan, index=df.index)
+        )
+        sma_crossover = (
+            (sma20 / sma50) - 1.0
+            if sma20 is not None and sma50 is not None
+            else pd.Series(np.nan, index=df.index)
+        )
 
         # 3. Momentum indicators
         rsi_14 = ta.rsi(close, length=14)
@@ -130,8 +140,12 @@ class FeatureBuilder:
         if bb is not None and not bb.empty:
             bbp_cols = [c for c in bb.columns if c.startswith("BBP_")]
             bbb_cols = [c for c in bb.columns if c.startswith("BBB_")]
-            bb_pct_b = bb[bbp_cols[0]] if bbp_cols else pd.Series(np.nan, index=df.index)
-            bb_bandwidth = bb[bbb_cols[0]] if bbb_cols else pd.Series(np.nan, index=df.index)
+            bb_pct_b = (
+                bb[bbp_cols[0]] if bbp_cols else pd.Series(np.nan, index=df.index)
+            )
+            bb_bandwidth = (
+                bb[bbb_cols[0]] if bbb_cols else pd.Series(np.nan, index=df.index)
+            )
         else:
             bb_pct_b = pd.Series(np.nan, index=df.index)
             bb_bandwidth = pd.Series(np.nan, index=df.index)
@@ -144,10 +158,16 @@ class FeatureBuilder:
 
         # 5. Volume indicators
         vol_sma20 = ta.sma(volume, length=20)
-        volume_ratio = volume / vol_sma20 if vol_sma20 is not None else pd.Series(np.nan, index=df.index)
+        volume_ratio = (
+            volume / vol_sma20
+            if vol_sma20 is not None
+            else pd.Series(np.nan, index=df.index)
+        )
 
         obv = ta.obv(close, volume)
-        obv_10d_change = obv.diff(10) if obv is not None else pd.Series(np.nan, index=df.index)
+        obv_10d_change = (
+            obv.diff(10) if obv is not None else pd.Series(np.nan, index=df.index)
+        )
 
         # 6. Calendar features
         day_of_week = ts_series.dt.dayofweek.astype(float)
@@ -176,8 +196,12 @@ class FeatureBuilder:
         }
 
         # Filter dictionary to selected feature columns + 'ts'
-        cols_to_include = ["ts"] + [col for col in self.feature_cols if col in feature_dict]
-        features_df = pd.DataFrame({c: feature_dict[c] for c in cols_to_include}, index=df.index)
+        cols_to_include = ["ts"] + [
+            col for col in self.feature_cols if col in feature_dict
+        ]
+        features_df = pd.DataFrame(
+            {c: feature_dict[c] for c in cols_to_include}, index=df.index
+        )
 
         # Drop warmup NaNs
         clean_df = features_df.dropna().copy()
@@ -188,12 +212,16 @@ class FeatureBuilder:
         # Scale features if requested
         if scale:
             self.scaler = StandardScaler()
-            active_feature_cols = [c for c in self.feature_cols if c in clean_df.columns and c != "ts"]
+            active_feature_cols = [
+                c for c in self.feature_cols if c in clean_df.columns and c != "ts"
+            ]
             if train_window is not None:
                 start, end = train_window
                 train_slice = clean_df.iloc[start:end][active_feature_cols]
                 if train_slice.empty:
-                    raise ValueError(f"train_window {train_window} results in an empty training slice.")
+                    raise ValueError(
+                        f"train_window {train_window} results in an empty training slice."
+                    )
                 self.scaler.fit(train_slice)
             else:
                 self.scaler.fit(clean_df[active_feature_cols])

@@ -67,6 +67,7 @@ def test_session_factory_and_contextmanager(temp_db: sqlalchemy.Engine) -> None:
         assert queried.symbol == "AAPL"
         assert queried.display_name == "Apple Inc."
 
+
 def test_snapshot_immutability_trigger(temp_db: sqlalchemy.Engine) -> None:
     """Verify prediction columns are immutable but realized columns can be updated."""
     import pytest
@@ -77,23 +78,45 @@ def test_snapshot_immutability_trigger(temp_db: sqlalchemy.Engine) -> None:
     with get_session(temp_db) as session:
         # Need a ModelRun first to satisfy foreign key
         model_run = ModelRun(
-            ticker="AAPL", horizon="1d", model_type="ridge", model_version="1.0",
-            code_git_sha="abc", trained_at="2026-09-01T00:00:00Z",
-            train_start="2020-01-01", train_end="2021-01-01",
-            hyperparams_json="{}", feature_list_json="[]", random_seed=42,
-            wf_mae=1.0, wf_rmse=1.0, wf_dir_acc=0.5, wf_ci_cov=0.9, residual_std=1.0,
-            artifact_path="test"
+            ticker="AAPL",
+            horizon="1d",
+            model_type="ridge",
+            model_version="1.0",
+            code_git_sha="abc",
+            trained_at="2026-09-01T00:00:00Z",
+            train_start="2020-01-01",
+            train_end="2021-01-01",
+            hyperparams_json="{}",
+            feature_list_json="[]",
+            random_seed=42,
+            wf_mae=1.0,
+            wf_rmse=1.0,
+            wf_dir_acc=0.5,
+            wf_ci_cov=0.9,
+            residual_std=1.0,
+            artifact_path="test",
         )
         session.add(model_run)
         session.commit()
         session.refresh(model_run)
 
         snapshot = PredictionSnapshot(
-            prediction_id="test_uuid", ticker="AAPL", made_at="2026-09-01T00:00:00Z",
-            made_from_ts="2026-09-01T00:00:00Z", anchor_price=100.0, horizon="1d",
-            target_ts="2026-09-02T00:00:00Z", predicted_return=0.01, predicted_price=101.0,
-            lower_bound=99.0, upper_bound=103.0, model_type="ridge", model_version="1.0",
-            model_run_id=model_run.id, explain_json="{}", input_is_stale=0
+            prediction_id="test_uuid",
+            ticker="AAPL",
+            made_at="2026-09-01T00:00:00Z",
+            made_from_ts="2026-09-01T00:00:00Z",
+            anchor_price=100.0,
+            horizon="1d",
+            target_ts="2026-09-02T00:00:00Z",
+            predicted_return=0.01,
+            predicted_price=101.0,
+            lower_bound=99.0,
+            upper_bound=103.0,
+            model_type="ridge",
+            model_version="1.0",
+            model_run_id=model_run.id,
+            explain_json="{}",
+            input_is_stale=0,
         )
         session.add(snapshot)
         session.commit()
@@ -102,7 +125,7 @@ def test_snapshot_immutability_trigger(temp_db: sqlalchemy.Engine) -> None:
         snapshot.realized_price = 102.0
         session.add(snapshot)
         session.commit()
-        
+
         # Update predicted price should fail
         snapshot.predicted_price = 105.0
         session.add(snapshot)

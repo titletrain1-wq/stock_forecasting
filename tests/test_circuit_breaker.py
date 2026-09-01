@@ -41,9 +41,7 @@ def test_circuit_breaker_transitions(db_session: Session) -> None:
     assert cb.check_state(provider) == "open"
 
     # Simulate cooldown expiration by setting breaker_opened_at to 20 minutes ago
-    metric.breaker_opened_at = (
-        datetime.now(UTC) - timedelta(minutes=20)
-    ).isoformat()
+    metric.breaker_opened_at = (datetime.now(UTC) - timedelta(minutes=20)).isoformat()
     db_session.add(metric)
     db_session.commit()
 
@@ -76,9 +74,7 @@ def test_circuit_breaker_half_open_failure_reopens(db_session: Session) -> None:
         select(LinkMetrics).where(LinkMetrics.provider == provider)
     ).first()
     assert metric is not None
-    metric.breaker_opened_at = (
-        datetime.now(UTC) - timedelta(minutes=16)
-    ).isoformat()
+    metric.breaker_opened_at = (datetime.now(UTC) - timedelta(minutes=16)).isoformat()
     db_session.add(metric)
     db_session.commit()
 

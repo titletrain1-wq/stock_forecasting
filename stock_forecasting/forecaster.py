@@ -169,7 +169,9 @@ class ForecastService:
                     if alt_path.exists():
                         artifact_path = alt_path
                     else:
-                        raise FileNotFoundError(f"Model artifact file not found at '{artifact_path}'.")
+                        raise FileNotFoundError(
+                            f"Model artifact file not found at '{artifact_path}'."
+                        )
 
                 artifact = joblib.load(artifact_path)
                 model = artifact["model"]
@@ -178,13 +180,19 @@ class ForecastService:
                     "feature_list",
                     [c for c in features_df.columns if c != "ts"],
                 )
-                residual_std = float(artifact.get("residual_std", model_run.residual_std))
-                model_version = str(artifact.get("model_version", model_run.model_version))
+                residual_std = float(
+                    artifact.get("residual_std", model_run.residual_std)
+                )
+                model_version = str(
+                    artifact.get("model_version", model_run.model_version)
+                )
 
                 # Check missing features
                 missing_cols = [c for c in feature_cols if c not in features_df.columns]
                 if missing_cols:
-                    raise ValueError(f"Missing required feature columns in input: {missing_cols}")
+                    raise ValueError(
+                        f"Missing required feature columns in input: {missing_cols}"
+                    )
 
                 # Extract and scale features for the latest bar
                 X = latest_feature_row[feature_cols].values.reshape(1, -1)
@@ -297,20 +305,21 @@ class ForecastService:
 
     def _compute_target_ts(self, ticker: str, made_from_ts: str, horizon: str) -> str:
         from stock_forecasting.schema import Ticker
+
         h_days = self.HORIZON_DAYS[horizon]
         made_dt = pd.to_datetime(made_from_ts, utc=True)
-        
+
         ticker_obj = self.session.get(Ticker, ticker)
         asset_class = ticker_obj.asset_class if ticker_obj else "equity"
-        
+
         if asset_class == "equity":
             # Add business days
             target_dt = made_dt + pd.offsets.BDay(h_days)
-            # if made_dt was already on a weekend, BDay(h_days) might not behave exactly intuitively, 
-            # but it is a standard approach. 
+            # if made_dt was already on a weekend, BDay(h_days) might not behave exactly intuitively,
+            # but it is a standard approach.
         else:
             target_dt = made_dt + pd.Timedelta(days=h_days)
-            
+
         return target_dt.isoformat()
 
 

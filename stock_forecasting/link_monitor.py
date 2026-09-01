@@ -71,9 +71,7 @@ class LinkMonitor:
             elapsed_ms = (time.perf_counter() - start) * 1000.0
             self._record_call(provider=provider, rtt_ms=elapsed_ms, success=success)
 
-    def _record_call(
-        self, provider: str, rtt_ms: float, success: bool
-    ) -> LinkMetrics:
+    def _record_call(self, provider: str, rtt_ms: float, success: bool) -> LinkMetrics:
         """Record an API call measurement and update the LinkMetrics table.
 
         Args:
@@ -89,9 +87,7 @@ class LinkMonitor:
 
         metric = self.session.get(LinkMetrics, provider)
         if metric is None:
-            daily_limit = self.default_limits.get(
-                provider.lower(), DEFAULT_DAILY_LIMIT
-            )
+            daily_limit = self.default_limits.get(provider.lower(), DEFAULT_DAILY_LIMIT)
             metric = LinkMetrics(
                 provider=provider,
                 daily_limit=daily_limit,

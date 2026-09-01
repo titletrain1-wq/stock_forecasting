@@ -127,20 +127,24 @@ class Trainer:
                 "(minimum 60 required for indicator warmup and walk-forward split)."
             )
 
-        bars_df = pd.DataFrame(
-            [
-                {
-                    "ts": b.ts,
-                    "open": b.open,
-                    "high": b.high,
-                    "low": b.low,
-                    "close": b.close,
-                    "adj_close": b.adj_close,
-                    "volume": b.volume,
-                }
-                for b in bars
-            ]
-        ).sort_values("ts").reset_index(drop=True)
+        bars_df = (
+            pd.DataFrame(
+                [
+                    {
+                        "ts": b.ts,
+                        "open": b.open,
+                        "high": b.high,
+                        "low": b.low,
+                        "close": b.close,
+                        "adj_close": b.adj_close,
+                        "volume": b.volume,
+                    }
+                    for b in bars
+                ]
+            )
+            .sort_values("ts")
+            .reset_index(drop=True)
+        )
 
         # 2. Build features
         features_df = self.feature_builder.build(bars_df, scale=False)
@@ -169,13 +173,14 @@ class Trainer:
             )
 
         feature_cols = [
-            c for c in self.feature_builder.feature_cols
+            c
+            for c in self.feature_builder.feature_cols
             if c in valid_df.columns and c != "ts"
         ]
 
         X_full = valid_df[feature_cols].values
         y_full = valid_df[target_col].values
-        
+
         n_splits = 5
         if len(valid_df) < n_splits * 2:
             n_splits = max(2, len(valid_df) // 2)
@@ -200,7 +205,9 @@ class Trainer:
             if norm_model_type == "ridge":
                 wf_model = Ridge(alpha=1.0)
             else:
-                wf_model = RandomForestRegressor(n_estimators=100, random_state=random_seed)
+                wf_model = RandomForestRegressor(
+                    n_estimators=100, random_state=random_seed
+                )
 
             wf_model.fit(X_train_scaled, y_train)
             y_pred = wf_model.predict(X_test_scaled)
@@ -216,14 +223,20 @@ class Trainer:
         wf_dir_acc = float(np.mean(np.sign(y_pred_all) == np.sign(y_test_all)))
 
         residuals = y_test_all - y_pred_all
-        residual_std = float(np.std(residuals, ddof=1)) if len(residuals) > 1 else float(np.std(residuals))
-        
+        residual_std = (
+            float(np.std(residuals, ddof=1))
+            if len(residuals) > 1
+            else float(np.std(residuals))
+        )
+
         scaled_std = residual_std * np.sqrt(h)
 
         if scaled_std > 1e-12:
             ci_lower = y_pred_all - 1.96 * scaled_std
             ci_upper = y_pred_all + 1.96 * scaled_std
-            wf_ci_cov = float(np.mean((y_test_all >= ci_lower) & (y_test_all <= ci_upper)))
+            wf_ci_cov = float(
+                np.mean((y_test_all >= ci_lower) & (y_test_all <= ci_upper))
+            )
         else:
             wf_ci_cov = 1.0 if len(y_test_all) > 0 else 0.0
 
@@ -236,7 +249,9 @@ class Trainer:
         if norm_model_type == "ridge":
             prod_model = Ridge(alpha=1.0)
         else:
-            prod_model = RandomForestRegressor(n_estimators=100, random_state=random_seed)
+            prod_model = RandomForestRegressor(
+                n_estimators=100, random_state=random_seed
+            )
         prod_model.fit(X_full_scaled, y_full)
 
         # 7. Dump .joblib model artifact

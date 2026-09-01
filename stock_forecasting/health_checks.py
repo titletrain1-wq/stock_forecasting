@@ -351,9 +351,7 @@ class HealthChecker:
         bars = self.session.exec(select(OhlcvBar)).all()
 
         future_bars = [
-            (bar.ticker, bar.ts)
-            for bar in bars
-            if _parse_utc(bar.ts) > future_cutoff
+            (bar.ticker, bar.ts) for bar in bars if _parse_utc(bar.ts) > future_cutoff
         ]
 
         if future_bars:
@@ -403,11 +401,20 @@ class HealthChecker:
                 )
 
         if critical_warnings:
-            status, msg = "CRITICAL", f"Daily API quota critical: {'; '.join(critical_warnings)}"
+            status, msg = (
+                "CRITICAL",
+                f"Daily API quota critical: {'; '.join(critical_warnings)}",
+            )
         elif degraded_warnings:
-            status, msg = "DEGRADED", f"Daily API quota degraded: {'; '.join(degraded_warnings)}"
+            status, msg = (
+                "DEGRADED",
+                f"Daily API quota degraded: {'; '.join(degraded_warnings)}",
+            )
         else:
-            status, msg = "NOMINAL", "All provider daily quotas within normal limits (< 80%)."
+            status, msg = (
+                "NOMINAL",
+                "All provider daily quotas within normal limits (< 80%).",
+            )
 
         return HealthCheckResult("quota", status, msg, details)
 

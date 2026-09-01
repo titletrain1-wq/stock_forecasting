@@ -59,7 +59,9 @@ def test_forecaster_predict(db_session: Session, tmp_path: Path) -> None:
 
     # 2. Generate and persist forecast
     service = ForecastService(session=db_session, model_dir=tmp_path)
-    results = service.generate_and_persist(ticker=ticker, horizons=["1d"], model_types=["ridge"])
+    results = service.generate_and_persist(
+        ticker=ticker, horizons=["1d"], model_types=["ridge"]
+    )
 
     assert "1d_ridge" in results
     assert "1d" in results
@@ -110,12 +112,16 @@ def test_forecaster_missing_model(db_session: Session, tmp_path: Path) -> None:
 
     # Missing bars
     with pytest.raises(ValueError, match="No bars found"):
-        service.generate_and_persist(ticker="NONEXISTENT", horizons=["1d"], model_types=["ridge"])
+        service.generate_and_persist(
+            ticker="NONEXISTENT", horizons=["1d"], model_types=["ridge"]
+        )
 
     # Seed bars, but no trained model
     _insert_sample_bars(db_session, ticker="AAPL", n=100)
     with pytest.raises(ValueError, match="No active ModelRun found"):
-        service.generate_and_persist(ticker="AAPL", horizons=["1d"], model_types=["ridge"])
+        service.generate_and_persist(
+            ticker="AAPL", horizons=["1d"], model_types=["ridge"]
+        )
 
 
 def test_forecaster_target_ts_calculation(db_session: Session, tmp_path: Path) -> None:
@@ -142,11 +148,23 @@ def test_forecaster_target_ts_calculation(db_session: Session, tmp_path: Path) -
         expected_target_dt = made_dt + pd.offsets.BDay(days)
         assert target_dt == expected_target_dt
 
+
 def test_forecaster_target_ts_crypto(db_session: Session, tmp_path: Path) -> None:
     """Verify target_ts is correctly offset by horizon days for crypto."""
     ticker = "BTC"
     from stock_forecasting.schema import Ticker
-    db_session.add(Ticker(symbol=ticker, asset_class="crypto", display_name="Bitcoin", provider="ccxt", provider_symbol="BTC/USD", price_basis="raw", added_at="2026-09-01T00:00:00Z"))
+
+    db_session.add(
+        Ticker(
+            symbol=ticker,
+            asset_class="crypto",
+            display_name="Bitcoin",
+            provider="ccxt",
+            provider_symbol="BTC/USD",
+            price_basis="raw",
+            added_at="2026-09-01T00:00:00Z",
+        )
+    )
     db_session.commit()
     _insert_sample_bars(db_session, ticker=ticker, n=100)
 

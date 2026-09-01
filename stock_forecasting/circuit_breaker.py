@@ -135,9 +135,7 @@ class CircuitBreaker:
         """
         state = self.check_state(provider)
         if state == "open":
-            raise CircuitBreakerOpenException(
-                f"Circuit breaker for {provider} is OPEN"
-            )
+            raise CircuitBreakerOpenException(f"Circuit breaker for {provider} is OPEN")
 
         try:
             yield

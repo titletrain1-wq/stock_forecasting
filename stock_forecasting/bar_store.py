@@ -38,11 +38,7 @@ class BarRepository:
                 or bar.low > bar.high
             ):
                 reasons.append("ohlc_inconsistent")
-            if (
-                not hasattr(bar, "volume")
-                or bar.volume is None
-                or bar.volume < 0
-            ):
+            if not hasattr(bar, "volume") or bar.volume is None or bar.volume < 0:
                 reasons.append("negative_volume")
         except (AttributeError, TypeError, ValueError):
             reasons.append("schema_error")

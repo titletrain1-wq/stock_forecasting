@@ -25,7 +25,7 @@ def test_full_vertical_slice(temp_db):
             provider_symbol="AAPL",
             price_basis="raw",
             added_at="2024-01-01T00:00:00Z",
-            active=1
+            active=1,
         )
         session.add(ticker)
         session.commit()
@@ -44,11 +44,15 @@ def test_full_vertical_slice(temp_db):
 
         # 4. Forecast + write immutable ledger via ForecastService
         forecaster = ForecastService(session)
-        forecast_res = forecaster.generate_and_persist("AAPL", horizons=["1d"], model_types=["ridge"])
+        forecast_res = forecaster.generate_and_persist(
+            "AAPL", horizons=["1d"], model_types=["ridge"]
+        )
         assert "1d_ridge" in forecast_res or "1d" in forecast_res
 
         # Verify snapshot written to DB
-        snapshots = session.exec(select(PredictionSnapshot).where(PredictionSnapshot.ticker == "AAPL")).all()
+        snapshots = session.exec(
+            select(PredictionSnapshot).where(PredictionSnapshot.ticker == "AAPL")
+        ).all()
         assert len(snapshots) == 1
         snap = snapshots[0]
         assert snap.predicted_price > 0
@@ -65,7 +69,7 @@ def test_full_vertical_slice(temp_db):
             adj_close=snap.anchor_price * 1.02,
             volume=1000000,
             source="fake",
-            ingested_at="2026-09-01T00:00:00Z"
+            ingested_at="2026-09-01T00:00:00Z",
         )
         session.add(realized_bar)
         session.commit()

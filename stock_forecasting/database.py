@@ -18,7 +18,7 @@ def create_tables(engine: Engine) -> None:
     with engine.begin() as conn:
         conn.execute(text("PRAGMA journal_mode=WAL"))
         conn.execute(text("PRAGMA busy_timeout=5000"))
-        
+
         # Enforce prediction snapshot immutability
         trigger_sql = """
         CREATE TRIGGER IF NOT EXISTS enforce_snapshot_immutability

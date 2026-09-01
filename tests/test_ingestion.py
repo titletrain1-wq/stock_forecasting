@@ -72,9 +72,7 @@ def test_bar_repository_upsert(db_session: Session) -> None:
     assert inserted == 3
 
     # Query range
-    range_bars = repo.get_range(
-        "AAPL", "2026-01-01T00:00:00Z", "2026-01-03T00:00:00Z"
-    )
+    range_bars = repo.get_range("AAPL", "2026-01-01T00:00:00Z", "2026-01-03T00:00:00Z")
     assert len(range_bars) == 3
     assert range_bars[0].ts == "2026-01-01T00:00:00Z"
     assert range_bars[2].ts == "2026-01-03T00:00:00Z"
@@ -110,9 +108,7 @@ def test_bar_repository_upsert(db_session: Session) -> None:
     upsert_count = repo.upsert_bars("AAPL", updated_bars, source="yfinance")
     assert upsert_count == 0
 
-    all_bars = repo.get_range(
-        "AAPL", "2026-01-01T00:00:00Z", "2026-01-03T00:00:00Z"
-    )
+    all_bars = repo.get_range("AAPL", "2026-01-01T00:00:00Z", "2026-01-03T00:00:00Z")
     assert len(all_bars) == 3
     assert all_bars[2].close == 114.0
     assert all_bars[2].high == 115.0
@@ -253,9 +249,7 @@ def test_yfinance_provider_mocked() -> None:
     mock_df = pd.DataFrame(data, index=dates, columns=columns)
 
     with patch("yfinance.download", return_value=mock_df):
-        bars = provider.get_daily_history(
-            "AAPL", date(2024, 1, 2), date(2024, 1, 3)
-        )
+        bars = provider.get_daily_history("AAPL", date(2024, 1, 2), date(2024, 1, 3))
         assert len(bars) == 2
         assert bars[0].ts == "2024-01-02T00:00:00Z"
         assert bars[0].open == 180.0
@@ -279,18 +273,14 @@ def test_yfinance_provider_mocked() -> None:
     )
 
     with patch("yfinance.download", return_value=flat_df):
-        bars = provider.get_daily_history(
-            "AAPL", date(2024, 1, 5), date(2024, 1, 5)
-        )
+        bars = provider.get_daily_history("AAPL", date(2024, 1, 5), date(2024, 1, 5))
         assert len(bars) == 1
         assert bars[0].ts == "2024-01-05T00:00:00Z"
         assert bars[0].close == 103.0
 
     # Mock empty DataFrame
     with patch("yfinance.download", return_value=pd.DataFrame()):
-        bars = provider.get_daily_history(
-            "AAPL", date(2024, 1, 1), date(2024, 1, 5)
-        )
+        bars = provider.get_daily_history("AAPL", date(2024, 1, 1), date(2024, 1, 5))
         assert bars == []
 
     # Mock get_latest_bars with 0 lookback
@@ -346,9 +336,7 @@ def test_ingestion_service_poll(db_session: Session) -> None:
     assert results["MSFT"]["inserted"] > 0
 
     # Verify bars written to database
-    aapl_bars = db_session.exec(
-        select(OhlcvBar).where(OhlcvBar.ticker == "AAPL")
-    ).all()
+    aapl_bars = db_session.exec(select(OhlcvBar).where(OhlcvBar.ticker == "AAPL")).all()
     assert len(aapl_bars) == results["AAPL"]["inserted"]
 
     # Poll single ticker directly
@@ -382,9 +370,7 @@ def test_ingestion_service_backfill(db_session: Session) -> None:
     assert res["symbol"] == "BTC"
     assert res["inserted"] > 700  # 2 years of daily bars
 
-    btc_bars = db_session.exec(
-        select(OhlcvBar).where(OhlcvBar.ticker == "BTC")
-    ).all()
+    btc_bars = db_session.exec(select(OhlcvBar).where(OhlcvBar.ticker == "BTC")).all()
     assert len(btc_bars) == res["inserted"]
     assert all(b.source == "fake" for b in btc_bars)
 
@@ -447,4 +433,3 @@ def test_ingestion_service_missing_ticker_or_provider(
     backfill_fail = service.backfill("FAIL")
     assert backfill_fail["inserted"] == 0
     assert "429" in backfill_fail.get("error", "")
-

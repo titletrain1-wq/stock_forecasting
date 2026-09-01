@@ -43,7 +43,9 @@ def test_feature_builder_creates_features() -> None:
     for col in FEATURE_COLUMNS:
         assert col in features_df.columns, f"Missing feature column: {col}"
         assert features_df[col].notna().all(), f"NaNs found in feature: {col}"
-        assert np.isfinite(features_df[col]).all(), f"Infinite values found in feature: {col}"
+        assert np.isfinite(features_df[col]).all(), (
+            f"Infinite values found in feature: {col}"
+        )
 
     # Verify warmup rows were dropped (at least 49 rows dropped for 50-period SMA)
     assert len(features_df) <= len(bars_df) - 49
@@ -69,7 +71,9 @@ def test_feature_builder_no_lookahead() -> None:
         target_ts = bars_df.iloc[t_idx]["ts"]
 
         row_full = full_features[full_features["ts"] == target_ts][feature_cols].iloc[0]
-        row_trunc = trunc_features[trunc_features["ts"] == target_ts][feature_cols].iloc[0]
+        row_trunc = trunc_features[trunc_features["ts"] == target_ts][
+            feature_cols
+        ].iloc[0]
 
         np.testing.assert_allclose(
             row_trunc.values.astype(float),
@@ -94,13 +98,19 @@ def test_feature_builder_scaling() -> None:
     assert builder.scaler is not None
 
     numeric_cols = [c for c in builder.feature_cols if c != "ts"]
-    non_const_full = unscaled_df[numeric_cols].columns[unscaled_df[numeric_cols].std(ddof=0) > 1e-6]
+    non_const_full = unscaled_df[numeric_cols].columns[
+        unscaled_df[numeric_cols].std(ddof=0) > 1e-6
+    ]
     means = scaled_df[non_const_full].mean()
     stds = scaled_df[non_const_full].std(ddof=0)
 
     np.testing.assert_allclose(means.values, 0.0, atol=1e-6)
     np.testing.assert_allclose(stds.values, 1.0, atol=1e-6)
-    np.testing.assert_allclose(scaled_df[numeric_cols].values, builder.scaler.transform(unscaled_df[numeric_cols]), atol=1e-7)
+    np.testing.assert_allclose(
+        scaled_df[numeric_cols].values,
+        builder.scaler.transform(unscaled_df[numeric_cols]),
+        atol=1e-7,
+    )
 
     # 3. Scaled with train_window
     train_start, train_end = 0, 40
@@ -113,10 +123,16 @@ def test_feature_builder_scaling() -> None:
 
     train_slice = window_scaled_df.iloc[train_start:train_end][numeric_cols]
     unscaled_train_slice = unscaled_df.iloc[train_start:train_end][numeric_cols]
-    non_const_cols = unscaled_train_slice.columns[unscaled_train_slice.std(ddof=0) > 1e-6]
+    non_const_cols = unscaled_train_slice.columns[
+        unscaled_train_slice.std(ddof=0) > 1e-6
+    ]
 
-    np.testing.assert_allclose(train_slice[non_const_cols].mean().values, 0.0, atol=1e-6)
-    np.testing.assert_allclose(train_slice[non_const_cols].std(ddof=0).values, 1.0, atol=1e-6)
+    np.testing.assert_allclose(
+        train_slice[non_const_cols].mean().values, 0.0, atol=1e-6
+    )
+    np.testing.assert_allclose(
+        train_slice[non_const_cols].std(ddof=0).values, 1.0, atol=1e-6
+    )
 
     # Verify fitted scaler produces exact train and test slices
     expected_train = builder.scaler.transform(unscaled_train_slice)

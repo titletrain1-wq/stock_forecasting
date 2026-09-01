@@ -157,9 +157,7 @@ def test_coingecko_empty_or_invalid_responses() -> None:
 
     # Inverted date range
     assert (
-        provider.get_daily_history(
-            "BTC", start=date(2026, 1, 10), end=date(2026, 1, 1)
-        )
+        provider.get_daily_history("BTC", start=date(2026, 1, 10), end=date(2026, 1, 1))
         == []
     )
 
@@ -334,9 +332,7 @@ def test_coinbase_empty_or_invalid_responses() -> None:
 
     # Inverted date range
     assert (
-        provider.get_daily_history(
-            "BTC", start=date(2026, 1, 10), end=date(2026, 1, 1)
-        )
+        provider.get_daily_history("BTC", start=date(2026, 1, 10), end=date(2026, 1, 1))
         == []
     )
 

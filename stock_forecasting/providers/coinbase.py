@@ -131,14 +131,12 @@ class CoinbaseProvider(DataProvider):
                 # Chunk size up to 250 days to be comfortably within Coinbase 300 candle limit
                 current_end = min(end, current_start + timedelta(days=250))
 
-                start_iso = (
-                    datetime.combine(current_start, time.min, tzinfo=UTC).isoformat()
-                )
-                end_iso = (
-                    datetime.combine(
-                        current_end, time(23, 59, 59), tzinfo=UTC
-                    ).isoformat()
-                )
+                start_iso = datetime.combine(
+                    current_start, time.min, tzinfo=UTC
+                ).isoformat()
+                end_iso = datetime.combine(
+                    current_end, time(23, 59, 59), tzinfo=UTC
+                ).isoformat()
 
                 url = f"{self.base_url}/products/{product_id}/candles"
                 params = {

@@ -15,7 +15,9 @@ from stock_forecasting.schema import ModelRun
 from stock_forecasting.trainer import ModelArtifact, Trainer
 
 
-def _insert_sample_bars(session: Session, ticker: str = "TEST", n: int = 100, seed: int = 42) -> None:
+def _insert_sample_bars(
+    session: Session, ticker: str = "TEST", n: int = 100, seed: int = 42
+) -> None:
     """Helper to insert deterministic synthetic bars for testing."""
     np.random.seed(seed)
     dates = pd.date_range("2023-01-01", periods=n, freq="D", tz="UTC")

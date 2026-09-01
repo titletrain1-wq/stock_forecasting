@@ -173,9 +173,7 @@ class CoinGeckoProvider(DataProvider):
         bars = self.get_daily_history(symbol, start=start_date, end=today)
         return bars[-lookback:]
 
-    def _parse_market_chart_data(
-        self, data: Any, start: date, end: date
-    ) -> list[Bar]:
+    def _parse_market_chart_data(self, data: Any, start: date, end: date) -> list[Bar]:
         """Parse raw CoinGecko market chart JSON or OHLC list into clean Bar objects."""
         if not data:
             return []
