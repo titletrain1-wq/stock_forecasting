@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from datetime import date
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 
 @dataclass
@@ -16,6 +16,7 @@ class Bar:
     volume: float
 
 
+@runtime_checkable
 class DataProvider(Protocol):
     """Data source protocol."""
 
