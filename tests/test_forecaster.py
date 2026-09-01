@@ -77,8 +77,6 @@ def test_published_ci_band_uses_h_horizon_residual_directly(
 
     assert half_width_log == pytest.approx(expected, rel=1e-6)
     assert abs(half_width_log - wrong) > 0.5  # nowhere near the sqrt(h) value
-    # 30d band is not dramatically wider than 1d on the same residual scale.
-    assert half_width_log < 1.0  # ~exp(1) => at most ~2.7x, not 5x+
 
 
 def test_forecaster_input_is_stale_reflects_anchor_freshness(

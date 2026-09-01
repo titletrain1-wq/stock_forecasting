@@ -12,7 +12,7 @@ from stock_forecasting.ingestion import IngestionService
 from stock_forecasting.providers.base import Bar
 from stock_forecasting.providers.fake import FakeProvider
 from stock_forecasting.providers.yfinance import YFinanceProvider
-from stock_forecasting.schema import OhlcvBar, QuarantineBar, Ticker
+from stock_forecasting.schema import LinkMetrics, OhlcvBar, QuarantineBar, Ticker
 
 
 def _create_sample_ticker(session: Session, symbol: str = "AAPL") -> Ticker:
@@ -423,7 +423,6 @@ def test_ingestion_service_missing_ticker_or_provider(
 
     # ...and the outage is surfaced to LinkMetrics so check_error_rate sees it,
     # rather than being silently swallowed on the empty-provider-chain path.
-    from stock_forecasting.schema import LinkMetrics
 
     unk_metric = db_session.get(LinkMetrics, "unregistered_provider")
     assert unk_metric is not None
@@ -464,8 +463,6 @@ def test_poll_ticker_fails_over_to_fallback_when_primary_breaker_open(
         providers={"yfinance": _AlwaysFailProvider(), "tiingo": FakeProvider()},
     )
 
-    from stock_forecasting.schema import LinkMetrics
-
     # First poll: yfinance raises + records a failure, then fails over to tiingo.
     first = service.poll_ticker("AAPL")
     assert first["provider"] == "tiingo"
@@ -495,8 +492,6 @@ def test_poll_ticker_records_success_keeps_breaker_closed(db_session: Session) -
     res = service.poll_ticker("AAPL")
     assert res["provider"] == "yfinance"
     assert "failover_from" not in res
-
-    from stock_forecasting.schema import LinkMetrics
 
     yf = db_session.get(LinkMetrics, "yfinance")
     assert yf.breaker_state == "closed"
