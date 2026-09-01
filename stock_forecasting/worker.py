@@ -2,6 +2,7 @@
 
 import logging
 import os
+import threading
 from datetime import UTC, datetime
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -12,6 +13,8 @@ from stock_forecasting.config import Settings, get_settings
 from stock_forecasting.database import create_tables, get_engine
 from stock_forecasting.forecaster import ForecastService
 from stock_forecasting.ingestion import IngestionService
+from stock_forecasting.intraday_store import IntradayRepository, LiveQuoteRepository
+from stock_forecasting.live_feed import CoinbaseWSClient, Tick, coinbase_rest_candles
 from stock_forecasting.providers.base import DataProvider, DerivativesProvider
 from stock_forecasting.providers.coinbase import CoinbaseProvider
 from stock_forecasting.providers.coingecko import CoinGeckoProvider
@@ -125,6 +128,9 @@ class WorkerScheduler:
         self.providers = providers or self._init_default_providers()
         self.derivatives_provider: DerivativesProvider = DydxDerivativesProvider()
         self.scheduler = scheduler or BackgroundScheduler()
+        # v2 live display path: one Coinbase WS connection, owned here.
+        self.ws_client: CoinbaseWSClient | None = None
+        self._ws_thread: threading.Thread | None = None
         with Session(self.engine) as session:
             _reconcile_ticker_providers(session, self.providers)
 
@@ -348,8 +354,128 @@ class WorkerScheduler:
                     error_msg=str(exc),
                 )
 
+    # ------------------------------------------------------------------ v2 live feed
+
+    def _active_crypto_product_ids(self) -> list[str]:
+        """Coinbase product ids for the active crypto watchlist (e.g. ``BTC-USD``)."""
+        with Session(self.engine) as session:
+            rows = session.exec(
+                select(Ticker).where(Ticker.active == 1, Ticker.asset_class == "crypto")
+            ).all()
+        return [t.provider_symbol or t.symbol for t in rows]
+
+    def _on_tick(self, tick: Tick) -> None:
+        """Persist one live tick: overwrite ``live_quotes`` + extend the 1m bucket.
+
+        Per docs/spikes/2026-09-01-M2-wal-contention.md each tick is its own short
+        transaction; the WS daemon is the only writer so there is no writer race.
+        """
+        symbol = tick.product_id
+        with Session(self.engine) as session:
+            LiveQuoteRepository(session).upsert(
+                symbol,
+                price=tick.price,
+                ts=tick.event_ts,
+                source="coinbase_ws",
+                received_at=tick.received_at,
+            )
+            intraday = IntradayRepository(session)
+            bucket = intraday.bucket_start(tick.event_ts, "1m")
+            intraday.upsert_forming(
+                symbol, "1m", bucket, tick.price, source="coinbase_ws"
+            )
+
+    def _start_live_feed(self) -> None:
+        """Open the single Coinbase WS connection on a daemon thread (idempotent)."""
+        if not self.settings.live_ws_enabled or self.ws_client is not None:
+            return
+        product_ids = self._active_crypto_product_ids()
+        if not product_ids:
+            return
+        self.ws_client = CoinbaseWSClient(
+            url=self.settings.coinbase_ws_url,
+            product_ids=product_ids,
+            on_tick=self._on_tick,
+            idle_timeout_sec=self.settings.ws_idle_timeout_sec,
+        )
+        self._ws_thread = threading.Thread(
+            target=self.ws_client.run_forever, name="coinbase-ws", daemon=True
+        )
+        self._ws_thread.start()
+        logger.info("Coinbase WS feed started for %s", ", ".join(product_ids))
+
+    def _stop_live_feed(self) -> None:
+        """Stop the WS client and join its thread (best effort, 2s)."""
+        if self.ws_client is not None:
+            self.ws_client.stop()
+        if self._ws_thread is not None:
+            self._ws_thread.join(timeout=2.0)
+        self.ws_client = None
+        self._ws_thread = None
+
+    def job_prune_intraday(self) -> None:
+        """Delete intraday bars older than the retention window (daily)."""
+        logger.info("Executing job_prune_intraday...")
+        with Session(self.engine) as session:
+            try:
+                deleted = IntradayRepository(session).prune(
+                    self.settings.intraday_retention_days
+                )
+                logger.info("Pruned %d stale intraday bars", deleted)
+                _update_heartbeat(session, "job_prune_intraday", success=True)
+            except Exception as exc:
+                logger.exception("Error during job_prune_intraday")
+                _update_heartbeat(
+                    session, "job_prune_intraday", success=False, error_msg=str(exc)
+                )
+
+    def job_check_ws_idle(self) -> None:
+        """If the WS has gone quiet, pull REST candles as a fallback.
+
+        A connected-but-silent socket (off-hours, a stalled feed) would otherwise
+        freeze the live chart. When ``seconds_since_last_message`` exceeds the
+        idle timeout, fetch the latest 1m candles per crypto ticker and record the
+        ``live_feed_crypto`` heartbeat as degraded; otherwise record it healthy.
+        """
+        if self.ws_client is None:
+            return
+        idle = self.ws_client.seconds_since_last_message
+        with Session(self.engine) as session:
+            if idle <= self.settings.ws_idle_timeout_sec:
+                _update_heartbeat(session, "live_feed_crypto", success=True)
+                return
+            product_ids = self._active_crypto_product_ids()
+            errors: list[str] = []
+            for pid in product_ids:
+                try:
+                    candles = coinbase_rest_candles(pid, granularity=60)
+                except Exception as exc:  # noqa: BLE001 - fallback must not raise
+                    errors.append(f"{pid}: {exc}")
+                    continue
+                intraday = IntradayRepository(session)
+                quotes = LiveQuoteRepository(session)
+                for row in candles:
+                    intraday.upsert_forming(
+                        pid, "1m", row["ts"], row["close"], source="coinbase_rest"
+                    )
+                    if not row["is_provisional"]:
+                        intraday.close_bucket(pid, "1m", row["ts"])
+                if candles:
+                    newest = candles[0]
+                    quotes.upsert(
+                        pid,
+                        price=newest["close"],
+                        ts=newest["ts"],
+                        source="coinbase_rest",
+                    )
+            msg = f"WS idle {idle:.0f}s; REST fallback"
+            if errors:
+                msg += " (errors: " + "; ".join(errors) + ")"
+            _update_heartbeat(session, "live_feed_crypto", success=False, error_msg=msg)
+
     def start(self) -> None:
         """Register all periodic jobs and start the BackgroundScheduler."""
+        self._start_live_feed()
         self.scheduler.add_job(
             self.job_ingest_crypto,
             "interval",
@@ -392,13 +518,28 @@ class WorkerScheduler:
             id="job_heartbeat",
             replace_existing=True,
         )
+        self.scheduler.add_job(
+            self.job_prune_intraday,
+            "interval",
+            hours=24,
+            id="job_prune_intraday",
+            replace_existing=True,
+        )
+        self.scheduler.add_job(
+            self.job_check_ws_idle,
+            "interval",
+            seconds=max(30, self.settings.ws_idle_timeout_sec // 2),
+            id="job_check_ws_idle",
+            replace_existing=True,
+        )
 
         if not self.scheduler.running:
             self.scheduler.start()
             logger.info("WorkerScheduler started successfully.")
 
     def stop(self, wait: bool = False) -> None:
-        """Shutdown the background scheduler if currently running."""
+        """Shutdown: stop the WS feed first, then the scheduler."""
+        self._stop_live_feed()
         if self.scheduler.running:
             self.scheduler.shutdown(wait=wait)
             logger.info("WorkerScheduler stopped.")
