@@ -168,7 +168,11 @@ def test_health_checker_critical(db_session: Session) -> None:
 
 
 def test_check_freshness(db_session: Session) -> None:
-    """Test freshness evaluation for crypto and equity bar age boundaries."""
+    """Freshness is judged against the daily trading calendar, not wall-clock minutes.
+
+    2026-09-01 is a Tuesday (NYSE open); 12:00 UTC is pre-open, so the last
+    completed equity session is Monday 2026-08-31.
+    """
     now = datetime(2026, 9, 1, 12, 0, 0, tzinfo=UTC)
     checker = HealthChecker(db_session)
     assert checker.check_freshness(now=now).status == "NOMINAL"
@@ -185,12 +189,13 @@ def test_check_freshness(db_session: Session) -> None:
     )
     db_session.add(ticker_crypto)
     db_session.commit()
+    # No bar at all -> DEGRADED (no_data).
     assert checker.check_freshness(now=now).status == "DEGRADED"
 
     bar = OhlcvBar(
         ticker="ETH",
         interval="1d",
-        ts=(now - timedelta(minutes=4)).isoformat(),
+        ts="2026-09-01T00:00:00Z",
         open=3000.0,
         high=3100.0,
         low=2950.0,
@@ -201,17 +206,52 @@ def test_check_freshness(db_session: Session) -> None:
     )
     db_session.add(bar)
     db_session.commit()
+    # Today's crypto bar, even though it is 12h old by wall-clock -> NOMINAL.
     assert checker.check_freshness(now=now).status == "NOMINAL"
 
-    bar.ts = (now - timedelta(minutes=15)).isoformat()
-    db_session.add(bar)
-    db_session.commit()
-    assert checker.check_freshness(now=now).status == "DEGRADED"
-
-    bar.ts = (now - timedelta(minutes=90)).isoformat()
+    # Crypto bar 4 calendar days behind -> CRITICAL.
+    bar.ts = "2026-08-28T00:00:00Z"
     db_session.add(bar)
     db_session.commit()
     assert checker.check_freshness(now=now).status == "CRITICAL"
+
+
+def test_check_freshness_equity_premarket_is_nominal(db_session: Session) -> None:
+    """An equity feed showing yesterday's close pre-open must not read CRITICAL."""
+    now = datetime(2026, 9, 1, 12, 0, 0, tzinfo=UTC)
+    ticker = Ticker(
+        symbol="AAPL",
+        asset_class="equity",
+        display_name="Apple",
+        provider="yfinance",
+        provider_symbol="AAPL",
+        price_basis="adjusted",
+        added_at=now.isoformat(),
+        active=1,
+    )
+    db_session.add(ticker)
+    db_session.add(
+        OhlcvBar(
+            ticker="AAPL",
+            interval="1d",
+            ts="2026-08-31T00:00:00Z",
+            open=150.0,
+            high=155.0,
+            low=149.0,
+            close=152.0,
+            volume=10000.0,
+            source="yfinance",
+            ingested_at=now.isoformat(),
+        )
+    )
+    db_session.commit()
+
+    checker = HealthChecker(db_session)
+    assert checker.check_freshness(now=now).status == "NOMINAL"
+
+    # Same feed a week later, still stuck on 2026-08-31 -> CRITICAL.
+    later = datetime(2026, 9, 8, 12, 0, 0, tzinfo=UTC)
+    assert checker.check_freshness(now=later).status == "CRITICAL"
 
 
 def test_check_latency(db_session: Session) -> None:

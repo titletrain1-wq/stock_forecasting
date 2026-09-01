@@ -17,6 +17,7 @@ from typing import Any
 
 from sqlmodel import Session, select
 
+from stock_forecasting.market_calendar import classify_bar_freshness
 from stock_forecasting.schema import (
     LinkMetrics,
     OhlcvBar,
@@ -52,7 +53,14 @@ class HealthChecker:
         self.session = session
 
     def check_freshness(self, now: datetime | None = None) -> HealthCheckResult:
-        """Check market bar age against expected thresholds (crypto <5m, equity <20m)."""
+        """Check each ticker's latest bar against its expected daily schedule.
+
+        This is an end-of-day system (daily bars), so freshness is judged against
+        the trading calendar -- NYSE sessions for equities, one bar per UTC day
+        for crypto -- not against wall-clock minutes. A bar is CRITICAL only when
+        it is genuinely overdue: >=2 missed NYSE sessions, or >=3 days behind for
+        crypto. See ``market_calendar.classify_bar_freshness``.
+        """
         current_time = now or datetime.now(UTC)
         tickers = self.session.exec(select(Ticker).where(Ticker.active == 1)).all()
 
@@ -76,38 +84,28 @@ class HealthChecker:
                 .limit(1)
             ).first()
 
-            if latest_bar is None:
-                has_degraded = True
-                warnings.append(f"{ticker.symbol}: no bar data ingested")
-                details[ticker.symbol] = {"status": "DEGRADED", "reason": "no_data"}
-                continue
+            latest_ts = latest_bar.ts if latest_bar is not None else None
+            ticker_status, fresh_details = classify_bar_freshness(
+                ticker.asset_class, latest_ts, current_time
+            )
 
-            bar_dt = _parse_utc(latest_bar.ts)
-            age_sec = (current_time - bar_dt).total_seconds()
-            age_min = age_sec / 60.0
-            is_crypto = ticker.asset_class.lower() == "crypto"
-            nominal_limit_sec = 300.0 if is_crypto else 1200.0
-
-            if age_sec <= nominal_limit_sec:
-                ticker_status = "NOMINAL"
-            elif age_sec <= 3600.0:
-                ticker_status = "DEGRADED"
-                has_degraded = True
-                warnings.append(
-                    f"{ticker.symbol} ({ticker.asset_class}) stale by {age_min:.1f}m"
-                )
-            else:
-                ticker_status = "CRITICAL"
+            if ticker_status == "CRITICAL":
                 has_critical = True
                 warnings.append(
-                    f"{ticker.symbol} ({ticker.asset_class}) severely stale by {age_min:.1f}m"
+                    f"{ticker.symbol} ({ticker.asset_class}) bar overdue: {fresh_details}"
+                )
+            elif ticker_status == "DEGRADED":
+                has_degraded = True
+                reason = fresh_details.get("reason", "behind schedule")
+                warnings.append(
+                    f"{ticker.symbol} ({ticker.asset_class}) {reason}: {fresh_details}"
                 )
 
             details[ticker.symbol] = {
                 "status": ticker_status,
                 "asset_class": ticker.asset_class,
-                "latest_ts": latest_bar.ts,
-                "age_seconds": age_sec,
+                "latest_ts": latest_ts,
+                **fresh_details,
             }
 
         if has_critical:
