@@ -39,8 +39,13 @@ def load_tickers(engine) -> list[Ticker]:
 
 
 def load_bars(engine, symbol: str, days: int) -> list[OhlcvBar]:
-    """Return the selected ticker's daily bars within the last ``days``."""
-    cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+    """Return the selected ticker's daily bars within the last ``days``.
+
+    The cutoff is a date-only prefix (``YYYY-MM-DD``) so the lexicographic
+    ``OhlcvBar.ts >= cutoff`` filter is independent of the ISO offset spelling
+    (``Z`` vs ``+00:00``) and always includes the whole boundary day.
+    """
+    cutoff = (datetime.now(UTC) - timedelta(days=days)).date().isoformat()
     with Session(engine) as session:
         return list(
             session.exec(

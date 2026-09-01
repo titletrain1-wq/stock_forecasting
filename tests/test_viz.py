@@ -79,6 +79,14 @@ def test_actual_close_line_present() -> None:
     assert list(actual[0].y) == [b.close for b in BARS]
 
 
+def test_actual_line_sorts_unordered_bars_by_ts() -> None:
+    shuffled = [BARS[7], BARS[0], BARS[19], BARS[3]]
+    fig = build_price_figure(shuffled, [])
+    actual = next(t for t in fig.data if t.name == "Actual")
+    assert list(actual.x) == sorted(b.ts for b in shuffled)
+    assert list(actual.y) == [100.0 + 1, 100.0 + 4, 100.0 + 8, 100.0 + 20]
+
+
 def test_actual_candles_when_requested() -> None:
     fig = build_price_figure(BARS, [], show_actual_candles=True)
     assert any(isinstance(t, go.Candlestick) for t in fig.data)

@@ -93,6 +93,48 @@ def test_open_breaker_provider_marked_down(db_session) -> None:
     assert view.status in ("DEGRADED", "CRITICAL")
 
 
+def test_provider_badge_standby_and_recovering(db_session) -> None:
+    db_session.add(SystemHeartbeat(job_type="hb", last_pulse_ts=_iso(seconds=10)))
+    db_session.add(
+        LinkMetrics(
+            provider="coinbase",
+            breaker_state="closed",
+            consecutive_failures=0,
+            calls_today=0,
+            daily_limit=10000,
+            updated_at=_iso(seconds=10),
+        )
+    )
+    db_session.add(
+        LinkMetrics(
+            provider="finnhub",
+            breaker_state="half_open",
+            consecutive_failures=2,
+            calls_today=4,
+            daily_limit=1000,
+            updated_at=_iso(seconds=10),
+        )
+    )
+    db_session.commit()
+    badges = {
+        c.provider: c.badge for c in build_health_view(db_session, now=NOW).providers
+    }
+    assert badges["coinbase"] == "🟢 STANDBY"
+    assert badges["finnhub"] == "🟡 RECOVERING"
+
+
+def test_worker_label_lagging_then_down(db_session) -> None:
+    db_session.add(SystemHeartbeat(job_type="a", last_pulse_ts=_iso(minutes=8)))
+    db_session.commit()
+    assert build_health_view(db_session, now=NOW).worker_label.startswith("🟡 LAGGING")
+
+    hb = db_session.get(SystemHeartbeat, "a")
+    hb.last_pulse_ts = _iso(minutes=40)
+    db_session.add(hb)
+    db_session.commit()
+    assert build_health_view(db_session, now=NOW).worker_label.startswith("🔴 DOWN")
+
+
 def test_pending_evals_counts_only_matured_ungraded(db_session) -> None:
     base = {
         "ticker": "AAPL",

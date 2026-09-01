@@ -34,6 +34,7 @@ STATUS_BADGE: dict[str, str] = {
 
 
 def _parse_utc(ts: str) -> datetime:
+    """Parse an ISO-8601 timestamp to a tz-aware UTC datetime (offset-spelling agnostic)."""
     dt = datetime.fromisoformat(ts)
     return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
 
@@ -120,7 +121,8 @@ def _watchdog_rows(session: Session, now: datetime) -> tuple[list[WatchdogRow], 
     rows: list[WatchdogRow] = []
     newest_age: float | None = None
     for hb in sorted(heartbeats, key=lambda h: h.job_type):
-        ref = hb.last_success_ts or hb.last_pulse_ts
+        # last_pulse_ts first, to agree with HealthChecker.check_watchdog.
+        ref = hb.last_pulse_ts or hb.last_success_ts
         if ref is None:
             rows.append(WatchdogRow(hb.job_type, None, "never", False))
             continue
@@ -143,8 +145,7 @@ def _pending_evals(session: Session, now: datetime) -> int:
     snaps = session.exec(
         select(PredictionSnapshot).where(PredictionSnapshot.evaluated_at.is_(None))
     ).all()
-    now_iso = now.isoformat()
-    return sum(1 for s in snaps if str(s.target_ts) <= now_iso)
+    return sum(1 for s in snaps if _parse_utc(str(s.target_ts)) <= now)
 
 
 def _data_quality_pct(session: Session, now: datetime) -> int:
