@@ -30,6 +30,18 @@ HIT_COLOR = "#26A69A"
 MISS_COLOR = "#EF5350"
 PENDING_COLOR = "rgba(120, 120, 120, 0.55)"
 
+# Verbatim, from Meredith (design §5.2). The CI band is ALWAYS anchored to
+# P_close — live intraday ticks never move lower_bound / upper_bound / the ribbon.
+# Surfaced on every figure (annotation below) + the app caption + KNOWN_LIMITATIONS.
+CI_DISCLAIMER = (
+    "Statistical confidence intervals (±1.96 σ_h) and horizon accuracy "
+    "evaluations are strictly calibrated to forecasts anchored at completed "
+    "daily market closes (P_close). Plotted CI bands anchored to live intraday "
+    "prices (P_live) represent informal visual projections; using P_live as a "
+    "dynamic band origin invalidates the calibrated 95% walk-forward coverage "
+    "guarantee."
+)
+
 HORIZON_DASH: dict[str, str] = {"1d": "dot", "5d": "dash", "30d": "longdash"}
 DEFAULT_LATEST_HORIZONS: tuple[str, ...] = ("1d", "5d", "30d")
 
@@ -258,6 +270,21 @@ def build_price_figure(
         "uirevision": True,
     }
     fig.update_layout(**layout)
+
+    # M6 overlay-integrity fence: the calibration disclaimer rides on every
+    # figure. The band stays P_close-anchored; live ticks only move the "live"
+    # line added by add_live_price_line.
+    fig.add_annotation(
+        text=CI_DISCLAIMER,
+        xref="paper",
+        yref="paper",
+        x=0.0,
+        y=-0.18,
+        xanchor="left",
+        showarrow=False,
+        align="left",
+        font={"size": 9, "color": "rgba(120, 120, 120, 0.9)"},
+    )
 
     if not fig.data:
         fig.add_annotation(

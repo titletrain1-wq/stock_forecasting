@@ -30,6 +30,7 @@ from stock_forecasting.schema import (
     Ticker,
 )
 from stock_forecasting.viz import (
+    CI_DISCLAIMER,
     DEFAULT_LATEST_HORIZONS,
     add_live_price_line,
     build_price_figure,
@@ -219,6 +220,9 @@ def render_chart_panel(engine, symbol: str, ticker: Ticker) -> None:
         # Stable key -> Streamlit reuses the existing Plotly canvas instead of
         # remounting it, so ticks update in place without flicker (Spec §3.1).
         st.plotly_chart(fig, use_container_width=True, key="live_price_chart")
+        # M6: calibration disclaimer — the CI band is anchored to P_close, never
+        # the live price. Also on the figure itself and in KNOWN_LIMITATIONS.md.
+        st.caption(CI_DISCLAIMER)
 
     st.fragment(_live_region, run_every=_refresh_for(ticker.asset_class))()
 

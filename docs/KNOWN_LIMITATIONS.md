@@ -33,3 +33,11 @@ This document outlines the known operational boundaries, provider caveats, and d
 
 - **Warmup Window**: Technical indicator calculation requires a minimum of 50 historical daily bars. Tickers with fewer than 50 bars will be skipped during feature extraction.
 - **Trustworthiness Criteria**: Aggregate forecast accuracy records require a minimum sample size $n \ge 30$ and directional accuracy $\ge 55\%$ before marking `is_trustworthy = 1`.
+
+## 5. Live Price vs. Calibrated Forecast Band (v2 streaming chart)
+
+The streaming chart moves a live intraday price line across a **static** forecast ribbon and CI band. The band is always anchored to the last completed daily close (`P_close`) and is never re-based on the live tick. Verbatim (per design §5.2):
+
+> "Statistical confidence intervals (±1.96 σ_h) and horizon accuracy evaluations are strictly calibrated to forecasts anchored at completed daily market closes (P_close). Plotted CI bands anchored to live intraday prices (P_live) represent informal visual projections; using P_live as a dynamic band origin invalidates the calibrated 95% walk-forward coverage guarantee."
+
+This text is surfaced on every chart figure and in the app chart caption. A regression test (`tests/test_ml_overlay_integrity.py`) fences it: mutating every `live_quotes.price` leaves `lower_bound` / `upper_bound` and every ribbon point byte-identical — only the `live` trace moves.
