@@ -14,6 +14,7 @@ import streamlit as st
 from sqlmodel import Session, select
 
 from stock_forecasting.database import get_engine
+from stock_forecasting.health_view import build_health_view
 from stock_forecasting.panels import (
     accuracy_rows,
     build_explain_figure,
@@ -225,6 +226,46 @@ def render_explain_panel(engine, symbol: str) -> None:
         )
 
 
+def render_health_panel(engine) -> None:
+    """Data-feed health strip — system badge, providers, watchdog, pending evals. Spec §6."""
+    with Session(engine) as session:
+        view = build_health_view(session)
+
+    st.subheader("System health")
+    h1, h2, h3 = st.columns(3)
+    h1.metric("System", view.badge)
+    h2.metric("Worker", view.worker_label)
+    h3.metric("Data quality", f"{view.data_quality_pct}%")
+
+    if view.warnings:
+        for w in view.warnings:
+            st.warning(w)
+
+    if view.providers:
+        st.dataframe(
+            [
+                {
+                    "provider": c.provider,
+                    "RTT p50": f"{c.rtt_p50_ms:.0f}ms" if c.rtt_p50_ms else "—",
+                    "err %": f"{c.error_rate * 100:.0f}%",
+                    "quota %": f"{c.quota_pct * 100:.0f}%",
+                    "breaker": c.breaker_state,
+                    "status": c.badge,
+                }
+                for c in view.providers
+            ],
+            hide_index=True,
+            use_container_width=True,
+        )
+    else:
+        st.caption("No provider metrics yet — start the worker.")
+
+    watchdog = " · ".join(f"{r.job_type} {r.age_label}" for r in view.watchdog)
+    st.caption(
+        f"Watchdog: {watchdog or 'no jobs recorded'}    Pending evals: {view.pending_evals}"
+    )
+
+
 def main() -> None:
     """Render the single-screen forecast view."""
     st.set_page_config(layout="wide", page_title="Stock Forecasting")
@@ -243,6 +284,7 @@ def main() -> None:
     render_chart_panel(engine, symbol, ticker)
     render_accuracy_panel(engine, symbol)
     render_explain_panel(engine, symbol)
+    render_health_panel(engine)
 
 
 if __name__ == "__main__":

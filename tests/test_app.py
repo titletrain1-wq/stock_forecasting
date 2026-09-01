@@ -20,7 +20,12 @@ def test_app_imports_cleanly() -> None:
     from stock_forecasting import app
 
     assert hasattr(app, "main")
-    for fn in ("render_chart_panel", "render_accuracy_panel", "render_explain_panel"):
+    for fn in (
+        "render_chart_panel",
+        "render_accuracy_panel",
+        "render_explain_panel",
+        "render_health_panel",
+    ):
         assert hasattr(app, fn)
     # streamlit-lightweight-charts must be gone
     assert "streamlit_lightweight_charts" not in sys.modules
@@ -108,3 +113,4 @@ def test_render_panels_no_crash_on_empty_db(temp_db) -> None:
 
     app.render_accuracy_panel(temp_db, "AAPL")
     app.render_explain_panel(temp_db, "AAPL")
+    app.render_health_panel(temp_db)
