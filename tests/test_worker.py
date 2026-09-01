@@ -176,6 +176,52 @@ def test_worker_jobs_execution(temp_db: Engine, db_session: Session) -> None:
     assert hb_eval.consecutive_failures == 0
 
 
+def test_default_providers_include_keyless_set_and_gate_on_keys(
+    temp_db: Engine,
+) -> None:
+    """yfinance + coinbase (keyless) + fake always register; keyed providers gate on their key."""
+    no_keys = Settings(db_path=":memory:")
+    w1 = WorkerScheduler(engine=temp_db, settings=no_keys)
+    assert {"yfinance", "coinbase", "fake"}.issubset(w1.providers)
+    assert "tiingo" not in w1.providers
+    assert "finnhub" not in w1.providers
+    assert "coingecko" not in w1.providers
+
+    with_keys = Settings(
+        db_path=":memory:",
+        tiingo_api_key="tk",
+        finnhub_api_key="fk",
+        coingecko_api_key="ck",
+    )
+    w2 = WorkerScheduler(engine=temp_db, settings=with_keys)
+    assert {"tiingo", "finnhub", "coingecko"}.issubset(w2.providers)
+
+
+def test_worker_registers_derivatives_ingest_job(temp_db: Engine) -> None:
+    """A job_ingest_derivatives must be scheduled so M9 crypto derivatives actually ingest."""
+    worker = WorkerScheduler(engine=temp_db, settings=Settings(db_path=":memory:"))
+    worker.start()
+    try:
+        job_ids = {job.id for job in worker.scheduler.get_jobs()}
+        assert "job_ingest_derivatives" in job_ids
+    finally:
+        worker.stop(wait=False)
+
+
+def test_worker_reconciles_crypto_ticker_to_keyless_primary(
+    temp_db: Engine, db_session: Session
+) -> None:
+    """A crypto ticker left on coingecko (needs a key) is moved to coinbase (keyless)."""
+    _create_sample_ticker(
+        db_session, "BTC-USD", asset_class="crypto", provider="coingecko"
+    )
+
+    WorkerScheduler(engine=temp_db, settings=Settings(db_path=":memory:"))
+
+    row = db_session.exec(select(Ticker).where(Ticker.symbol == "BTC-USD")).first()
+    assert row is not None and row.provider == "coinbase"
+
+
 def test_worker_ingest_records_failure_when_all_polls_error(
     temp_db: Engine, db_session: Session
 ) -> None:

@@ -12,13 +12,22 @@ from stock_forecasting.config import Settings, get_settings
 from stock_forecasting.database import create_tables, get_engine
 from stock_forecasting.forecaster import ForecastService
 from stock_forecasting.ingestion import IngestionService
-from stock_forecasting.providers.base import DataProvider
+from stock_forecasting.providers.base import DataProvider, DerivativesProvider
+from stock_forecasting.providers.coinbase import CoinbaseProvider
+from stock_forecasting.providers.coingecko import CoinGeckoProvider
+from stock_forecasting.providers.dydx import DydxDerivativesProvider
 from stock_forecasting.providers.fake import FakeProvider
+from stock_forecasting.providers.finnhub import FinnhubProvider
+from stock_forecasting.providers.tiingo import TiingoProvider
 from stock_forecasting.providers.yfinance import YFinanceProvider
 from stock_forecasting.schema import SystemHeartbeat, Ticker
 from stock_forecasting.trainer import Trainer
 
 logger = logging.getLogger(__name__)
+
+# Crypto tickers must default to a keyless provider so ingestion works out of
+# the box. CoinGecko needs a Demo key (HTTP 401 without one); Coinbase is keyless.
+_KEYLESS_CRYPTO_PRIMARY = "coinbase"
 
 
 def _update_heartbeat(
@@ -66,6 +75,32 @@ def _update_heartbeat(
     return heartbeat
 
 
+def _reconcile_ticker_providers(
+    session: Session, providers: dict[str, DataProvider]
+) -> None:
+    """Point crypto tickers at a working keyless primary.
+
+    A crypto ticker whose primary provider is not currently registered (the
+    common case being ``coingecko`` with no Demo key) is moved to
+    ``coinbase``, which is keyless and always available. Idempotent.
+    """
+    crypto = session.exec(select(Ticker).where(Ticker.asset_class == "crypto")).all()
+    changed = False
+    for ticker in crypto:
+        if ticker.provider not in providers and _KEYLESS_CRYPTO_PRIMARY in providers:
+            logger.info(
+                "Reconciling ticker %s: provider %s -> %s",
+                ticker.symbol,
+                ticker.provider,
+                _KEYLESS_CRYPTO_PRIMARY,
+            )
+            ticker.provider = _KEYLESS_CRYPTO_PRIMARY
+            session.add(ticker)
+            changed = True
+    if changed:
+        session.commit()
+
+
 class WorkerScheduler:
     """Orchestrates scheduled tasks for stock_forecasting background processing."""
 
@@ -88,14 +123,35 @@ class WorkerScheduler:
         self.engine = engine or get_engine(self.settings.db_path)
         create_tables(self.engine)
         self.providers = providers or self._init_default_providers()
+        self.derivatives_provider: DerivativesProvider = DydxDerivativesProvider()
         self.scheduler = scheduler or BackgroundScheduler()
+        with Session(self.engine) as session:
+            _reconcile_ticker_providers(session, self.providers)
 
     def _init_default_providers(self) -> dict[str, DataProvider]:
-        """Initialize standard data providers."""
-        return {
+        """Build the provider map: keyless providers always, keyed providers gated on key.
+
+        yfinance + coinbase are keyless and always registered. tiingo / finnhub /
+        coingecko register only when their API key is configured. ``fake`` is kept
+        for tests and offline demos.
+        """
+        providers: dict[str, DataProvider] = {
             "yfinance": YFinanceProvider(),
+            "coinbase": CoinbaseProvider(),
             "fake": FakeProvider(),
         }
+        if self.settings.tiingo_api_key:
+            providers["tiingo"] = TiingoProvider(api_key=self.settings.tiingo_api_key)
+        if self.settings.finnhub_api_key:
+            providers["finnhub"] = FinnhubProvider(
+                api_key=self.settings.finnhub_api_key
+            )
+        if self.settings.coingecko_api_key:
+            providers["coingecko"] = CoinGeckoProvider(
+                api_key=self.settings.coingecko_api_key
+            )
+        logger.info("Registered data providers: %s", ", ".join(sorted(providers)))
+        return providers
 
     def _update_heartbeat(
         self,
@@ -168,6 +224,35 @@ class WorkerScheduler:
     def job_ingest_equities(self) -> None:
         """Poll and ingest latest market bars for all active equity tickers."""
         self._run_ingest_job("equity", "job_ingest_equities")
+
+    def job_ingest_derivatives(self) -> None:
+        """Refresh crypto funding-rate + open-interest for all active crypto tickers."""
+        job_type = "job_ingest_derivatives"
+        logger.info("Executing %s...", job_type)
+        with Session(self.engine) as session:
+            try:
+                svc = IngestionService(
+                    session,
+                    self.providers,
+                    derivatives_provider=self.derivatives_provider,
+                )
+                results = svc.poll_all_derivatives()
+                errored = [r for r in results.values() if r.get("error")]
+                if results and len(errored) == len(results):
+                    detail = "; ".join(
+                        f"{r.get('symbol', '?')}: {r['error']}" for r in errored
+                    )
+                    _update_heartbeat(
+                        session,
+                        job_type,
+                        success=False,
+                        error_msg=f"all {len(results)} derivatives polls failed: {detail}",
+                    )
+                else:
+                    _update_heartbeat(session, job_type, success=True)
+            except Exception as exc:
+                logger.exception("Error during %s", job_type)
+                _update_heartbeat(session, job_type, success=False, error_msg=str(exc))
 
     def job_retrain_nightly(self) -> None:
         """Retrain predictive models for active tickers and generate updated forecasts."""
@@ -277,6 +362,13 @@ class WorkerScheduler:
             "interval",
             minutes=self.settings.poll_interval_equity_min,
             id="job_ingest_equities",
+            replace_existing=True,
+        )
+        self.scheduler.add_job(
+            self.job_ingest_derivatives,
+            "interval",
+            seconds=self.settings.poll_interval_crypto_sec,
+            id="job_ingest_derivatives",
             replace_existing=True,
         )
         self.scheduler.add_job(
