@@ -24,6 +24,19 @@ class Settings(BaseSettings):
     finnhub_api_key: str = ""
     coingecko_api_key: str = ""
 
+    # --- v2 real-time display layer ---
+    # The live path is separate from the daily ML/ledger path: crypto streams
+    # from Coinbase's keyless WebSocket, equities poll yfinance intraday (~15min
+    # delayed). None of this feeds training or the forecast ledger.
+    live_ws_enabled: bool = True
+    coinbase_ws_url: str = "wss://ws-feed.exchange.coinbase.com"
+    ws_idle_timeout_sec: int = 90  # no tick/heartbeat this long -> REST fallback
+    intraday_equity_interval: str = "5m"
+    intraday_poll_equity_min: int = 5
+    intraday_retention_days: int = 7
+    live_fragment_refresh_crypto_sec: int = 2
+    live_fragment_refresh_equity_sec: int = 15
+
 
 @lru_cache
 def get_settings() -> Settings:

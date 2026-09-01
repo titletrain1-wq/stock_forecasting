@@ -45,6 +45,45 @@ class OhlcvBar(SQLModel, table=True):
     ingested_at: str
 
 
+class IntradayBar(SQLModel, table=True):
+    """Sub-daily OHLCV buckets for the live display path.
+
+    Kept separate from ``ohlcv_bars`` (daily, immutable, ML training + evaluation).
+    Auto-pruned by the worker after ``intraday_retention_days``.
+    """
+
+    __tablename__ = "intraday_bars"
+    __table_args__ = (
+        UniqueConstraint("ticker", "interval", "ts", name="uq_intraday_bar"),
+        Index("ix_intraday_lookup", "ticker", "interval", "ts"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    ticker: str = Field(foreign_key="tickers.symbol")
+    interval: str  # "1m" | "5m"
+    ts: str  # bucket start, ISO-8601 UTC
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float = 0.0
+    is_provisional: int = 1  # 1 = bucket forming or inside the delay window
+    source: str  # "coinbase_ws" | "coinbase_rest" | "yfinance_intraday"
+    ingested_at: str
+
+
+class LiveQuote(SQLModel, table=True):
+    """Current price anchor: one row per ticker, overwritten each tick."""
+
+    __tablename__ = "live_quotes"
+
+    ticker: str = Field(primary_key=True, foreign_key="tickers.symbol")
+    price: float
+    ts: str  # provider event time, UTC
+    received_at: str  # wall-clock; drives display-path freshness
+    source: str
+
+
 class ModelRun(SQLModel, table=True):
     """Metadata and validation scores for trained model artifacts."""
 

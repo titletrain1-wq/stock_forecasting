@@ -32,6 +32,40 @@ def test_schema_creation(temp_db: sqlalchemy.Engine) -> None:
         assert table in tables, f"Missing table: {table}"
 
 
+def test_intraday_and_live_quote_tables_created(temp_db: sqlalchemy.Engine) -> None:
+    """v2: the real-time display layer needs two new tables."""
+    tables = set(sqlalchemy.inspect(temp_db).get_table_names())
+    assert "intraday_bars" in tables
+    assert "live_quotes" in tables
+
+
+def test_intraday_bar_unique_on_ticker_interval_ts(temp_db: sqlalchemy.Engine) -> None:
+    """v2: a forming bucket is one row per (ticker, interval, ts) - upsert target."""
+    import pytest
+    from sqlalchemy.exc import IntegrityError
+
+    from stock_forecasting.schema import IntradayBar
+
+    row = {
+        "ticker": "BTC-USD",
+        "interval": "1m",
+        "ts": "2026-09-01T00:00:00+00:00",
+        "open": 1.0,
+        "high": 1.0,
+        "low": 1.0,
+        "close": 1.0,
+        "volume": 0.0,
+        "source": "coinbase_ws",
+        "ingested_at": "2026-09-01T00:00:01+00:00",
+    }
+    with Session(temp_db) as session:
+        session.add(IntradayBar(**row))
+        session.commit()
+        session.add(IntradayBar(**row))
+        with pytest.raises(IntegrityError):
+            session.commit()
+
+
 def test_get_engine_creates_directory(tmp_path) -> None:
     """Verify get_engine creates parent directory when given a file path."""
     nested_db = tmp_path / "nested" / "dir" / "test.db"
