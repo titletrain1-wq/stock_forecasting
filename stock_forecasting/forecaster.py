@@ -168,7 +168,6 @@ class ForecastService:
                 raise ValueError(
                     f"Unsupported horizon '{horizon}'. Must be one of {list(self.HORIZON_DAYS.keys())}"
                 )
-            h_days = self.HORIZON_DAYS[horizon]
             target_ts = self._compute_target_ts(ticker, made_from_ts, horizon)
 
             for model_type in model_types:
@@ -234,8 +233,10 @@ class ForecastService:
                 predicted_return = float(model.predict(X_scaled)[0])
                 predicted_price = float(anchor_price * np.exp(predicted_return))
 
-                # Confidence intervals (95% CI scaled by sqrt(h))
-                scaled_std = float(residual_std * np.sqrt(h_days))
+                # 95% CI. residual_std is already the h-horizon residual (the
+                # model is trained on h-day cumulative returns), so it is used
+                # directly -- scaling by sqrt(h_days) here would double-count time.
+                scaled_std = residual_std
                 lower_bound = float(predicted_price * np.exp(-1.96 * scaled_std))
                 upper_bound = float(predicted_price * np.exp(1.96 * scaled_std))
 

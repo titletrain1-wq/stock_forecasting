@@ -253,7 +253,11 @@ class Trainer:
             else float(np.std(residuals))
         )
 
-        scaled_std = residual_std * np.sqrt(h)
+        # residual_std is already a h-horizon quantity: the target is the h-day
+        # cumulative log return (see target_series above), so residuals are h-day
+        # errors. Do NOT scale by sqrt(h) again -- that double-counts time and
+        # inflates the interval until wf_ci_cov pins at 1.0.
+        scaled_std = residual_std
 
         if scaled_std > 1e-12:
             ci_lower = y_pred_all - 1.96 * scaled_std

@@ -135,6 +135,27 @@ def test_trainer_insufficient_data(db_session: Session, tmp_path: Path) -> None:
         trainer.train(ticker="FEW", horizon="1d", model_type="ridge")
 
 
+def test_trainer_ci_coverage_well_calibrated_multi_horizon(
+    db_session: Session, tmp_path: Path
+) -> None:
+    """wf_ci_cov must land near nominal 95% for every horizon.
+
+    The target is the h-day cumulative log return, so ``residual_std`` is already
+    a h-horizon quantity. Scaling it by sqrt(h) again inflates the band until it
+    covers ~100% of test points regardless of h. A well-calibrated 95% interval
+    should sit in roughly [0.90, 0.99]; anything at 1.0 for a longer horizon is
+    the sqrt(h) double-count regressing.
+    """
+    _insert_sample_bars(db_session, ticker="TEST", n=500, seed=7)
+    trainer = Trainer(session=db_session, model_dir=tmp_path)
+
+    for horizon in ("1d", "5d", "30d"):
+        artifact = trainer.train(ticker="TEST", horizon=horizon, model_type="ridge")
+        assert 0.85 <= artifact.wf_ci_cov <= 0.99, (
+            f"{horizon}: wf_ci_cov={artifact.wf_ci_cov} outside calibrated band"
+        )
+
+
 def test_trainer_unsupported_params(db_session: Session, tmp_path: Path) -> None:
     """Verify error handling on unsupported horizons or model types."""
     _insert_sample_bars(db_session, ticker="TEST", n=100)
