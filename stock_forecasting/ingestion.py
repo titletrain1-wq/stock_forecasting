@@ -103,6 +103,9 @@ class IngestionService:
                 ticker.symbol,
                 ticker.provider,
             )
+            # Surface this as a provider failure so LinkMetrics / check_error_rate
+            # see the outage instead of it being silently swallowed.
+            self.circuit_breaker.record_failure(ticker.provider)
             return {
                 "symbol": ticker.symbol,
                 "inserted": 0,

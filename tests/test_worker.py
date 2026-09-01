@@ -176,6 +176,30 @@ def test_worker_jobs_execution(temp_db: Engine, db_session: Session) -> None:
     assert hb_eval.consecutive_failures == 0
 
 
+def test_worker_ingest_records_failure_when_all_polls_error(
+    temp_db: Engine, db_session: Session
+) -> None:
+    """A total ingest outage must surface as a heartbeat FAILURE, not success.
+
+    poll_ticker returns an error dict (it never raises) when no provider is
+    registered for the ticker. If the job ignores those dicts it records
+    success=True and the watchdog stays green while data goes stale.
+    """
+    _create_sample_ticker(
+        db_session, "BTC-USD", asset_class="crypto", provider="coingecko"
+    )
+
+    worker = WorkerScheduler(engine=temp_db, providers={"fake": FakeProvider()})
+    worker.job_ingest_crypto()
+
+    hb = db_session.exec(
+        select(SystemHeartbeat).where(SystemHeartbeat.job_type == "job_ingest_crypto")
+    ).first()
+    assert hb is not None
+    assert hb.consecutive_failures >= 1
+    assert hb.last_error is not None and "BTC-USD" in hb.last_error
+
+
 def test_worker_job_error_handling(temp_db: Engine, db_session: Session) -> None:
     """Verify worker jobs properly record failure status when exceptions occur."""
     worker = WorkerScheduler(engine=temp_db)

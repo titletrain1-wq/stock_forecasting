@@ -112,55 +112,62 @@ class WorkerScheduler:
             error_msg=error_msg,
         )
 
-    def job_ingest_crypto(self) -> None:
-        """Poll and ingest latest market bars for all active crypto tickers."""
-        logger.info("Executing job_ingest_crypto...")
+    def _run_ingest_job(self, asset_class: str, job_type: str) -> None:
+        """Poll every active ticker of ``asset_class`` and record an honest heartbeat.
+
+        ``poll_ticker`` returns an error dict rather than raising, so a total
+        outage would otherwise be logged as success. The heartbeat is recorded
+        as a failure only when *every* ticker errored (a partial failure still
+        counts as a live feed); the aggregated per-ticker errors become the
+        heartbeat ``last_error``.
+        """
+        logger.info("Executing %s...", job_type)
         with Session(self.engine) as session:
             try:
-                active_crypto = session.exec(
+                active = session.exec(
                     select(Ticker).where(
                         Ticker.active == 1,
-                        Ticker.asset_class == "crypto",
+                        Ticker.asset_class == asset_class,
                     )
                 ).all()
-                if active_crypto:
-                    ingestion_service = IngestionService(session, self.providers)
-                    for ticker in active_crypto:
-                        ingestion_service.poll_ticker(ticker.symbol)
-                _update_heartbeat(session, "job_ingest_crypto", success=True)
+                if not active:
+                    _update_heartbeat(session, job_type, success=True)
+                    return
+
+                ingestion_service = IngestionService(session, self.providers)
+                results = [
+                    ingestion_service.poll_ticker(ticker.symbol) for ticker in active
+                ]
+                errored = [r for r in results if r.get("error")]
+
+                if errored and len(errored) == len(results):
+                    detail = "; ".join(
+                        f"{r.get('symbol', '?')}: {r['error']}" for r in errored
+                    )
+                    _update_heartbeat(
+                        session,
+                        job_type,
+                        success=False,
+                        error_msg=f"all {len(results)} {asset_class} polls failed: {detail}",
+                    )
+                else:
+                    _update_heartbeat(session, job_type, success=True)
             except Exception as exc:
-                logger.exception("Error during job_ingest_crypto")
+                logger.exception("Error during %s", job_type)
                 _update_heartbeat(
                     session,
-                    "job_ingest_crypto",
+                    job_type,
                     success=False,
                     error_msg=str(exc),
                 )
 
+    def job_ingest_crypto(self) -> None:
+        """Poll and ingest latest market bars for all active crypto tickers."""
+        self._run_ingest_job("crypto", "job_ingest_crypto")
+
     def job_ingest_equities(self) -> None:
         """Poll and ingest latest market bars for all active equity tickers."""
-        logger.info("Executing job_ingest_equities...")
-        with Session(self.engine) as session:
-            try:
-                active_equities = session.exec(
-                    select(Ticker).where(
-                        Ticker.active == 1,
-                        Ticker.asset_class == "equity",
-                    )
-                ).all()
-                if active_equities:
-                    ingestion_service = IngestionService(session, self.providers)
-                    for ticker in active_equities:
-                        ingestion_service.poll_ticker(ticker.symbol)
-                _update_heartbeat(session, "job_ingest_equities", success=True)
-            except Exception as exc:
-                logger.exception("Error during job_ingest_equities")
-                _update_heartbeat(
-                    session,
-                    "job_ingest_equities",
-                    success=False,
-                    error_msg=str(exc),
-                )
+        self._run_ingest_job("equity", "job_ingest_equities")
 
     def job_retrain_nightly(self) -> None:
         """Retrain predictive models for active tickers and generate updated forecasts."""
