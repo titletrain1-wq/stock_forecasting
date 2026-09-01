@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     retrain_hour_utc: int = 22
     tiingo_api_key: str = ""
     finnhub_api_key: str = ""
+    coingecko_api_key: str = ""
 
 
 @lru_cache

@@ -10,8 +10,10 @@ This document outlines the known operational boundaries, provider caveats, and d
 ## 2. Provider API Constraints & Quirks
 
 - **Finnhub Stock Candles**: Finnhub's `/stock/candle` endpoint requires a premium plan for US equities. Free API keys return HTTP 403 or empty responses. **Tiingo** is configured as the functional primary fallback for Yahoo Finance equity data.
+- **CoinGecko Free-Tier Authentication**: CoinGecko's public `/coins/{id}/market_chart/range` endpoint requires a Demo API Key (returns HTTP 401 Unauthorized without one). Optional `COINGECKO_API_KEY` can be set in `.env`. **Coinbase** operates keyless and serves as the primary working fallback for cryptocurrency daily history via CircuitBreaker failover.
 - **dYdX Derivatives History**: The dYdX v4 Indexer API does not support historical open interest endpoints (open interest is available as a current market snapshot only). Funding rate history is available hourly dating back to dYdX v4 mainnet launch (~Nov 2023).
 - **Public API Quotas**: Free-tier API keys (CoinGecko, Coinbase, Tiingo, Finnhub) have rate limits. `LinkMonitor` and `CircuitBreaker` automatically guard quota limits and shift requests to secondary providers when thresholds are exceeded.
+
 
 ## 3. Visualization & UI Deferred Items
 
