@@ -36,12 +36,11 @@ cp .env.example .env
 
 ### After upgrading
 
-The v1.0.1 confidence-band fix changes model metrics. Regenerate the model
-artifacts once (the nightly retrain job also does this automatically):
-
-```bash
-uv run python -m stock_forecasting.worker   # let job_retrain_nightly run, or
-```
+The v1.0.1 confidence-band fix changes model metrics, so the model artifacts
+under `model_store/` must be regenerated once. The background worker's nightly
+retrain job (`job_retrain_nightly`) does this automatically the first time it
+runs; to force it immediately, start the worker and trigger that job, or run an
+equivalent retrain over every active `ticker × horizon × model_type`.
 
 ### 2. Running the Application
 

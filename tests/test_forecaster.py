@@ -47,6 +47,40 @@ def _insert_sample_bars(
     repo.upsert_bars(ticker=ticker, bars=bars, source="test")
 
 
+def test_published_ci_band_uses_h_horizon_residual_directly(
+    db_session: Session, tmp_path: Path
+) -> None:
+    """The persisted 30d band must be +-1.96*residual_std, NOT *sqrt(h) on top.
+
+    residual_std is already a h-horizon quantity (target = h-day cumulative log
+    return). Re-scaling by sqrt(30) blows the 30d band to ~0.2x/5x price -- the
+    exact regression v1.0.1 fixed. Guards forecaster.py, which the trainer-side
+    wf_ci_cov test does not touch.
+    """
+    ticker = "AAPL"
+    _insert_sample_bars(db_session, ticker=ticker, n=400, seed=11)
+    trainer = Trainer(session=db_session, model_dir=tmp_path)
+    artifact = trainer.train(ticker=ticker, horizon="30d", model_type="ridge")
+
+    service = ForecastService(session=db_session, model_dir=tmp_path)
+    res = service.predict(ticker=ticker, horizon="30d", model_type="ridge")
+
+    snap = db_session.exec(
+        select(PredictionSnapshot).where(
+            PredictionSnapshot.prediction_id == res.prediction_id
+        )
+    ).first()
+
+    half_width_log = np.log(snap.upper_bound / snap.predicted_price)
+    expected = 1.96 * artifact.residual_std
+    wrong = 1.96 * artifact.residual_std * np.sqrt(30)
+
+    assert half_width_log == pytest.approx(expected, rel=1e-6)
+    assert abs(half_width_log - wrong) > 0.5  # nowhere near the sqrt(h) value
+    # 30d band is not dramatically wider than 1d on the same residual scale.
+    assert half_width_log < 1.0  # ~exp(1) => at most ~2.7x, not 5x+
+
+
 def test_forecaster_input_is_stale_reflects_anchor_freshness(
     db_session: Session, tmp_path: Path
 ) -> None:
@@ -56,11 +90,6 @@ def test_forecaster_input_is_stale_reflects_anchor_freshness(
     trainer = Trainer(session=db_session, model_dir=tmp_path)
     trainer.train(ticker=ticker, horizon="1d", model_type="ridge")
     service = ForecastService(session=db_session, model_dir=tmp_path)
-
-    last_ts = db_session.exec(
-        select(PredictionSnapshot)
-    ).first()  # none yet; get anchor from bars instead
-    assert last_ts is None
 
     # Evaluate "now" right at the last bar's timestamp -> fresh.
     anchor_dt = pd.Timestamp("2023-01-01", tz="UTC") + pd.Timedelta(days=119)

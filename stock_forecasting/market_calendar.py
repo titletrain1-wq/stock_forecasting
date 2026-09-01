@@ -12,10 +12,28 @@ holidays. Crypto: 24/7 calendar."
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
+from functools import lru_cache
 
 import pandas_market_calendars as mcal
 
 _NYSE = mcal.get_calendar("NYSE")
+
+
+@lru_cache(maxsize=64)
+def _sessions_and_closes(
+    start_iso: str, end_iso: str
+) -> tuple[tuple[date, ...], tuple[datetime, ...]]:
+    """Cached NYSE (session_date, market_close_utc) pairs for a date range.
+
+    ``check_freshness`` builds this per equity ticker on every Streamlit rerun;
+    the range args are stable within a render so the cache collapses it to one
+    calendar build.
+    """
+    sched = _NYSE.schedule(start_date=start_iso, end_date=end_iso)
+    dates = tuple(ts.date() for ts in sched.index)
+    closes = tuple(c.to_pydatetime() for c in sched["market_close"])
+    return dates, closes
+
 
 # Crypto: a same-day or one-day-old bar is fine (a provider may not have published
 # today's forming candle yet early in the UTC day); 2 days behind is degraded, more
@@ -39,26 +57,21 @@ def last_completed_equity_session(now: datetime) -> date | None:
     holiday it is the last weekday session.
     """
     now = _as_utc(now)
-    sched = _NYSE.schedule(
-        start_date=(now - timedelta(days=14)).date().isoformat(),
-        end_date=now.date().isoformat(),
+    dates, closes = _sessions_and_closes(
+        (now - timedelta(days=14)).date().isoformat(), now.date().isoformat()
     )
-    if sched.empty:
-        return None
-    completed = sched[sched["market_close"] <= now]
-    if completed.empty:
-        return None
-    return completed.index[-1].date()
+    completed = [d for d, c in zip(dates, closes, strict=True) if c <= now]
+    return completed[-1] if completed else None
 
 
 def _equity_sessions_after(d: date, upto: date) -> list[date]:
     """NYSE session dates strictly after ``d`` and up to (inclusive) ``upto``."""
     if upto <= d:
         return []
-    sched = _NYSE.schedule(
-        start_date=(d + timedelta(days=1)).isoformat(), end_date=upto.isoformat()
+    dates, _ = _sessions_and_closes(
+        (d + timedelta(days=1)).isoformat(), upto.isoformat()
     )
-    return [ts.date() for ts in sched.index]
+    return list(dates)
 
 
 def classify_bar_freshness(

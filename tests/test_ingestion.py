@@ -421,6 +421,14 @@ def test_ingestion_service_missing_ticker_or_provider(
     assert poll_unk["inserted"] == 0
     assert "not found" in poll_unk.get("error", "").lower()
 
+    # ...and the outage is surfaced to LinkMetrics so check_error_rate sees it,
+    # rather than being silently swallowed on the empty-provider-chain path.
+    from stock_forecasting.schema import LinkMetrics
+
+    unk_metric = db_session.get(LinkMetrics, "unregistered_provider")
+    assert unk_metric is not None
+    assert unk_metric.consecutive_failures >= 1
+
     backfill_unk = service.backfill("UNK")
     assert backfill_unk["inserted"] == 0
     assert "not found" in backfill_unk.get("error", "").lower()

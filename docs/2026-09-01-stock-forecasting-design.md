@@ -8,6 +8,32 @@
 
 ---
 
+## Recorded deviations — v1.0.1 (2026-09-01)
+
+The post-release health analysis
+(`docs/reports/2026-09-01-postrelease-health-analysis.md`) found that the
+"expected next bar" model below was written for an intraday/streaming feed, but
+every provider only serves **daily** bars. v1.0.1 adopts an explicit
+**end-of-day** operating model (Issue 9, option A). The following clauses are
+superseded:
+
+- **§2 / §11 poll cadence** ("crypto ~60s, equities ~5min", "2,880 calls/day"):
+  the worker now polls **hourly** (`poll_interval_crypto_sec=3600`,
+  `poll_interval_equity_min=60`). Daily bars do not change faster; sub-minute
+  polling only re-fetched an unchanged bar and burned the free-tier budget.
+- **§6 check #1 Freshness** ("🟢 <20m stock / <5m crypto · 🔴 >1h in-hours"):
+  freshness is judged against the **trading calendar**
+  (`stock_forecasting/market_calendar.py`) — NYSE sessions via
+  `pandas-market-calendars` for equities, one bar per UTC day for crypto — not a
+  wall-clock age. CRITICAL only when a bar is genuinely overdue (equity: ≥2
+  missed sessions; crypto: ≥3 days behind).
+- **`input_is_stale`** ("data > 1h old at prediction time"): computed from the
+  anchor bar's calendar freshness (any non-NOMINAL state), not a 1-hour age.
+
+Everything else in the spec stands.
+
+---
+
 ## 1. Overview
 
 A **personal, single-user, no-auth** web app that forecasts **US stocks and crypto** at fixed

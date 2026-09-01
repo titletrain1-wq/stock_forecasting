@@ -66,3 +66,13 @@ Model metrics change with the CI-band fix. Regenerate artifacts once by letting
 - Coinbase returns a *forming* partial candle for the current UTC day, which is
   ingested as a normal bar; features / the forecast anchor can be built from a
   partial-day bar. Spec wants closed bars only.
+- **Issue 7** (analysis report): the accuracy panel stays empty until predictions
+  mature and the realized bar exists — a fresh-worker timing artifact, no code
+  change, but confirm `eval_attempts` increments on the "no realized bar" skip.
+- **Issue 8** (analysis report): `check_error_rate` / `check_latency` /
+  `check_quota` still count `LinkMetrics` rows for providers that are no longer
+  polled (e.g. a dead CoinGecko row), which can skew the "all providers down"
+  ratio. Scope those checks to the active provider set.
+- Issue 5 side effect: a provider now reads 🟢 (STANDBY/ACTIVE) while its breaker
+  is still `closed` even if it just failed a call — the amber "RECOVERING"
+  signal is only shown once the breaker actually opens.
