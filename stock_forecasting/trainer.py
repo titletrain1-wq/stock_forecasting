@@ -18,7 +18,7 @@ from sqlmodel import Session, select
 
 from stock_forecasting.bar_store import BarRepository
 from stock_forecasting.features import FeatureBuilder
-from stock_forecasting.schema import ModelRun
+from stock_forecasting.schema import CryptoDerivative, ModelRun, Ticker
 
 
 def _get_git_sha() -> str:
@@ -147,7 +147,31 @@ class Trainer:
         )
 
         # 2. Build features
-        features_df = self.feature_builder.build(bars_df, scale=False)
+        ticker_row = self.session.exec(
+            select(Ticker).where(Ticker.symbol == ticker)
+        ).first()
+        asset_class = ticker_row.asset_class if ticker_row else "equity"
+        derivatives_df = None
+        if asset_class == "crypto":
+            deriv_rows = self.session.exec(
+                select(CryptoDerivative).where(CryptoDerivative.ticker == ticker)
+            ).all()
+            if deriv_rows:
+                derivatives_df = pd.DataFrame(
+                    [
+                        {
+                            "ts": r.ts,
+                            "funding_rate": r.funding_rate,
+                            "open_interest": r.open_interest,
+                        }
+                        for r in deriv_rows
+                    ]
+                )
+
+        features_df = self.feature_builder.build(
+            bars_df, scale=False, asset_class=asset_class, derivatives_df=derivatives_df
+        )
+
         if features_df.empty:
             raise ValueError(
                 f"Insufficient data: feature extraction produced 0 rows for ticker '{ticker}'."

@@ -30,22 +30,38 @@ FEATURE_COLUMNS: list[str] = [
     "is_quarter_end",
 ]
 
+CRYPTO_FEATURE_COLUMNS: list[str] = [
+    "funding_rate",
+    "open_interest_norm",
+    "is_weekend",
+    "weekend_vol_ratio",
+]
+
 
 class FeatureBuilder:
     """Calculates technical indicators and features with strict zero lookahead."""
 
     def __init__(self, feature_cols: Sequence[str] | None = None) -> None:
         """Initialize FeatureBuilder with configured feature column names."""
-        self.feature_cols: list[str] = (
-            list(feature_cols) if feature_cols is not None else list(FEATURE_COLUMNS)
+        self.configured_feature_cols: list[str] | None = (
+            list(feature_cols) if feature_cols is not None else None
         )
         self.scaler: StandardScaler | None = None
+
+    @property
+    def feature_cols(self) -> list[str]:
+        """Return configured feature columns or default FEATURE_COLUMNS."""
+        if self.configured_feature_cols is not None:
+            return list(self.configured_feature_cols)
+        return list(FEATURE_COLUMNS)
 
     def build(
         self,
         bars_df: pd.DataFrame,
         train_window: tuple[int, int] | None = None,
         scale: bool = True,
+        asset_class: str = "equity",
+        derivatives_df: pd.DataFrame | None = None,
     ) -> pd.DataFrame:
         """Build technical indicator features from OHLCV bars.
 
@@ -56,13 +72,22 @@ class FeatureBuilder:
             train_window: Optional (start_idx, end_idx) tuple indicating slice
                           of rows for fitting StandardScaler.
             scale: Whether to scale feature columns with StandardScaler.
+            asset_class: "equity" or "crypto".
+            derivatives_df: Optional DataFrame of crypto derivatives (ts, funding_rate, open_interest).
 
         Returns:
             DataFrame containing 'ts' and the computed feature columns,
             with initial warmup NaNs dropped.
         """
+        if self.configured_feature_cols is not None:
+            active_cols = list(self.configured_feature_cols)
+        elif asset_class == "crypto":
+            active_cols = list(FEATURE_COLUMNS) + list(CRYPTO_FEATURE_COLUMNS)
+        else:
+            active_cols = list(FEATURE_COLUMNS)
+
         if bars_df.empty:
-            empty_cols = ["ts"] + [c for c in self.feature_cols if c != "ts"]
+            empty_cols = ["ts"] + [c for c in active_cols if c != "ts"]
             return pd.DataFrame(columns=empty_cols)
 
         # Work on a shallow copy / references
@@ -195,10 +220,61 @@ class FeatureBuilder:
             "is_quarter_end": is_quarter_end,
         }
 
-        # Filter dictionary to selected feature columns + 'ts'
-        cols_to_include = ["ts"] + [
-            col for col in self.feature_cols if col in feature_dict
-        ]
+        # 7. Crypto-only features
+        if asset_class == "crypto" or any(
+            c in active_cols for c in CRYPTO_FEATURE_COLUMNS
+        ):
+            is_weekend = (ts_series.dt.dayofweek >= 5).astype(float)
+            past_vol_sma14 = volume.shift(1).rolling(14, min_periods=1).mean()
+            weekend_vol_ratio = (
+                (volume / past_vol_sma14).replace([np.inf, -np.inf], 1.0).fillna(1.0)
+            )
+
+            funding_rate = pd.Series(0.0, index=df.index)
+            open_interest_norm = pd.Series(0.0, index=df.index)
+
+            if derivatives_df is not None and not derivatives_df.empty:
+                d_df = derivatives_df.copy()
+                d_df["d_ts"] = pd.to_datetime(d_df["ts"], utc=True)
+                merged = pd.merge_asof(
+                    pd.DataFrame({"ts": ts_series}, index=df.index).sort_values("ts"),
+                    d_df.sort_values("d_ts"),
+                    left_on="ts",
+                    right_on="d_ts",
+                    direction="backward",
+                )
+                merged.index = df.index
+                if (
+                    "funding_rate" in merged.columns
+                    and merged["funding_rate"].notna().any()
+                ):
+                    funding_rate = merged["funding_rate"].fillna(0.0).astype(float)
+                if (
+                    "open_interest" in merged.columns
+                    and merged["open_interest"].notna().any()
+                ):
+                    oi = merged["open_interest"].fillna(0.0).astype(float)
+                    oi_mean = oi.shift(1).expanding(min_periods=1).mean()
+                    oi_std = (
+                        oi.shift(1)
+                        .expanding(min_periods=1)
+                        .std()
+                        .fillna(1.0)
+                        .replace(0.0, 1.0)
+                    )
+                    open_interest_norm = (
+                        ((oi - oi_mean) / oi_std)
+                        .replace([np.inf, -np.inf], 0.0)
+                        .fillna(0.0)
+                    )
+
+            feature_dict["is_weekend"] = is_weekend
+            feature_dict["weekend_vol_ratio"] = weekend_vol_ratio
+            feature_dict["funding_rate"] = funding_rate
+            feature_dict["open_interest_norm"] = open_interest_norm
+
+        # Filter dictionary to active feature columns + 'ts'
+        cols_to_include = ["ts"] + [col for col in active_cols if col in feature_dict]
         features_df = pd.DataFrame(
             {c: feature_dict[c] for c in cols_to_include}, index=df.index
         )
@@ -213,7 +289,7 @@ class FeatureBuilder:
         if scale:
             self.scaler = StandardScaler()
             active_feature_cols = [
-                c for c in self.feature_cols if c in clean_df.columns and c != "ts"
+                c for c in active_cols if c in clean_df.columns and c != "ts"
             ]
             if train_window is not None:
                 start, end = train_window

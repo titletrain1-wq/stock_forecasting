@@ -4,7 +4,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from stock_forecasting.features import FEATURE_COLUMNS, FeatureBuilder
+from stock_forecasting.features import (
+    CRYPTO_FEATURE_COLUMNS,
+    FEATURE_COLUMNS,
+    FeatureBuilder,
+)
 
 
 def _generate_synthetic_bars(n: int = 150, seed: int = 42) -> pd.DataFrame:
@@ -60,7 +64,7 @@ def test_feature_builder_no_lookahead() -> None:
 
     # Pick multiple cutoff evaluation points
     assert len(full_features) >= 40
-    feature_cols = [c for c in builder.feature_cols if c != "ts"]
+    feature_cols = [c for c in FEATURE_COLUMNS if c != "ts"]
 
     # Test across multiple row cutoffs t
     for t_idx in range(60, len(bars_df)):
@@ -97,7 +101,7 @@ def test_feature_builder_scaling() -> None:
     scaled_df = builder.build(bars_df, scale=True)
     assert builder.scaler is not None
 
-    numeric_cols = [c for c in builder.feature_cols if c != "ts"]
+    numeric_cols = [c for c in FEATURE_COLUMNS if c != "ts"]
     non_const_full = unscaled_df[numeric_cols].columns[
         unscaled_df[numeric_cols].std(ddof=0) > 1e-6
     ]
@@ -195,3 +199,70 @@ def test_feature_builder_invalid_train_window() -> None:
 
     with pytest.raises(ValueError, match="empty training slice"):
         builder.build(bars_df, train_window=(10, 10), scale=True)
+
+
+def test_feature_builder_crypto() -> None:
+    """Verify that crypto features are generated when asset_class='crypto'."""
+    bars_df = _generate_synthetic_bars(n=150)
+    builder = FeatureBuilder()
+
+    deriv_df = pd.DataFrame(
+        {
+            "ts": bars_df["ts"],
+            "funding_rate": np.random.normal(0.0001, 0.0005, len(bars_df)),
+            "open_interest": np.random.uniform(1e6, 5e6, len(bars_df)),
+        }
+    )
+
+    features_df = builder.build(
+        bars_df, scale=False, asset_class="crypto", derivatives_df=deriv_df
+    )
+
+    assert not features_df.empty
+    for col in CRYPTO_FEATURE_COLUMNS:
+        assert col in features_df.columns, f"Missing crypto feature: {col}"
+        assert features_df[col].notna().all(), f"NaN in crypto feature: {col}"
+
+
+def test_feature_builder_crypto_no_lookahead() -> None:
+    """Property test: crypto features at row t are unchanged when rows > t are truncated."""
+    bars_df = _generate_synthetic_bars(n=120)
+    deriv_df = pd.DataFrame(
+        {
+            "ts": bars_df["ts"],
+            "funding_rate": np.random.normal(0.0001, 0.0005, len(bars_df)),
+            "open_interest": np.random.uniform(1e6, 5e6, len(bars_df)),
+        }
+    )
+    builder = FeatureBuilder()
+    full_features = builder.build(
+        bars_df, scale=False, asset_class="crypto", derivatives_df=deriv_df
+    )
+
+    all_crypto_cols = FEATURE_COLUMNS + CRYPTO_FEATURE_COLUMNS
+
+    for t_idx in range(60, len(bars_df)):
+        truncated_bars = bars_df.iloc[: t_idx + 1].copy()
+        truncated_deriv = deriv_df.iloc[: t_idx + 1].copy()
+        trunc_features = builder.build(
+            truncated_bars,
+            scale=False,
+            asset_class="crypto",
+            derivatives_df=truncated_deriv,
+        )
+
+        target_ts = bars_df.iloc[t_idx]["ts"]
+        row_full = full_features[full_features["ts"] == target_ts][
+            all_crypto_cols
+        ].iloc[0]
+        row_trunc = trunc_features[trunc_features["ts"] == target_ts][
+            all_crypto_cols
+        ].iloc[0]
+
+        np.testing.assert_allclose(
+            row_trunc.values.astype(float),
+            row_full.values.astype(float),
+            rtol=1e-7,
+            atol=1e-7,
+            err_msg=f"Crypto lookahead leak detected at cutoff row {t_idx}",
+        )
