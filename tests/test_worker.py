@@ -176,6 +176,13 @@ def test_worker_jobs_execution(temp_db: Engine, db_session: Session) -> None:
     assert hb_eval.consecutive_failures == 0
 
 
+def test_poll_cadence_defaults_are_end_of_day() -> None:
+    """Defaults poll hourly, not sub-minute -- daily bars don't change faster."""
+    s = Settings()
+    assert s.poll_interval_crypto_sec == 3600
+    assert s.poll_interval_equity_min == 60
+
+
 def test_default_providers_include_keyless_set_and_gate_on_keys(
     temp_db: Engine,
 ) -> None:

@@ -89,7 +89,11 @@ class HealthView:
 def _provider_badge(m: LinkMetrics) -> str:
     if m.breaker_state == "open":
         return "🔴 DOWN"
-    if m.breaker_state == "half_open" or (m.consecutive_failures or 0) > 0:
+    # RECOVERING only while the breaker is mid-recovery (half_open). A *closed*
+    # breaker is healthy even if consecutive_failures is a stale non-zero count
+    # (e.g. a provider that failed once at seed time and was never re-polled) --
+    # the next real success resets it via CircuitBreaker.record_success.
+    if m.breaker_state == "half_open":
         return "🟡 RECOVERING"
     if (m.calls_today or 0) == 0:
         return "🟢 STANDBY"

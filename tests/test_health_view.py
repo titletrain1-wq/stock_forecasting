@@ -123,6 +123,28 @@ def test_provider_badge_standby_and_recovering(db_session) -> None:
     assert badges["finnhub"] == "🟡 RECOVERING"
 
 
+def test_closed_breaker_with_stale_failure_count_is_not_recovering(db_session) -> None:
+    """A long-closed breaker whose consecutive_failures never got reset (dead
+    provider, never re-polled) must not be stuck on RECOVERING forever."""
+    db_session.add(SystemHeartbeat(job_type="hb", last_pulse_ts=_iso(seconds=10)))
+    db_session.add(
+        LinkMetrics(
+            provider="coingecko",
+            breaker_state="closed",
+            consecutive_failures=2,
+            error_rate=0.0,
+            calls_today=0,
+            daily_limit=10000,
+            updated_at=_iso(seconds=10),
+        )
+    )
+    db_session.commit()
+    badges = {
+        c.provider: c.badge for c in build_health_view(db_session, now=NOW).providers
+    }
+    assert badges["coingecko"] == "🟢 STANDBY"
+
+
 def test_worker_label_lagging_then_down(db_session) -> None:
     db_session.add(SystemHeartbeat(job_type="a", last_pulse_ts=_iso(minutes=8)))
     db_session.commit()

@@ -15,6 +15,7 @@ from sqlmodel import Session, select
 
 from stock_forecasting.bar_store import BarRepository
 from stock_forecasting.features import FeatureBuilder
+from stock_forecasting.market_calendar import bar_is_stale
 from stock_forecasting.schema import (
     CryptoDerivative,
     ModelRun,
@@ -73,6 +74,7 @@ class ForecastService:
         ticker: str,
         horizons: Sequence[str] = ("1d", "5d", "30d"),
         model_types: Sequence[str] = ("ridge",),
+        now: datetime | None = None,
     ) -> dict[str, ForecastResult]:
         """Generate forecasts for given horizons and model types and persist snapshots in a single transaction.
 
@@ -156,7 +158,9 @@ class ForecastService:
             anchor_price = float(last_bar.close)
 
         latest_feature_row = features_df.iloc[-1]
-        now_iso = datetime.now(UTC).isoformat()
+        current_dt = now or datetime.now(UTC)
+        now_iso = current_dt.isoformat()
+        input_is_stale = 1 if bar_is_stale(asset_class, made_from_ts, current_dt) else 0
 
         results: dict[str, ForecastResult] = {}
 
@@ -277,7 +281,7 @@ class ForecastService:
                     model_version=model_version,
                     model_run_id=model_run.id,
                     explain_json=json.dumps(explain),
-                    input_is_stale=0,
+                    input_is_stale=input_is_stale,
                 )
                 snapshots.append(snapshot)
 
@@ -315,6 +319,7 @@ class ForecastService:
         ticker: str,
         horizon: str = "1d",
         model_type: str = "ridge",
+        now: datetime | None = None,
     ) -> ForecastResult:
         """Generate a single forecast and persist its snapshot.
 
@@ -330,6 +335,7 @@ class ForecastService:
             ticker=ticker,
             horizons=[horizon],
             model_types=[model_type],
+            now=now,
         )
         return results[f"{horizon}_{model_type.lower()}"]
 

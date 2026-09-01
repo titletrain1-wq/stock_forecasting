@@ -47,6 +47,51 @@ def _insert_sample_bars(
     repo.upsert_bars(ticker=ticker, bars=bars, source="test")
 
 
+def test_forecaster_input_is_stale_reflects_anchor_freshness(
+    db_session: Session, tmp_path: Path
+) -> None:
+    """input_is_stale is computed from the anchor bar's schedule, not hardcoded 0."""
+    ticker = "AAPL"
+    _insert_sample_bars(db_session, ticker=ticker, n=120)
+    trainer = Trainer(session=db_session, model_dir=tmp_path)
+    trainer.train(ticker=ticker, horizon="1d", model_type="ridge")
+    service = ForecastService(session=db_session, model_dir=tmp_path)
+
+    last_ts = db_session.exec(
+        select(PredictionSnapshot)
+    ).first()  # none yet; get anchor from bars instead
+    assert last_ts is None
+
+    # Evaluate "now" right at the last bar's timestamp -> fresh.
+    anchor_dt = pd.Timestamp("2023-01-01", tz="UTC") + pd.Timedelta(days=119)
+    fresh = service.generate_and_persist(
+        ticker=ticker,
+        horizons=["1d"],
+        model_types=["ridge"],
+        now=anchor_dt.to_pydatetime(),
+    )
+    fresh_snap = db_session.exec(
+        select(PredictionSnapshot).where(
+            PredictionSnapshot.prediction_id == fresh["1d_ridge"].prediction_id
+        )
+    ).first()
+    assert fresh_snap.input_is_stale == 0
+
+    # Evaluate a week later with no new bar -> stale.
+    stale = service.generate_and_persist(
+        ticker=ticker,
+        horizons=["1d"],
+        model_types=["ridge"],
+        now=(anchor_dt + pd.Timedelta(days=8)).to_pydatetime(),
+    )
+    stale_snap = db_session.exec(
+        select(PredictionSnapshot).where(
+            PredictionSnapshot.prediction_id == stale["1d_ridge"].prediction_id
+        )
+    ).first()
+    assert stale_snap.input_is_stale == 1
+
+
 def test_forecaster_predict(db_session: Session, tmp_path: Path) -> None:
     """Verify forecasting with a trained Ridge model generates valid predictions, CI, and persisted snapshot."""
     ticker = "AAPL"
@@ -98,7 +143,9 @@ def test_forecaster_predict(db_session: Session, tmp_path: Path) -> None:
     assert snap.predicted_return == pytest.approx(res.predicted_return)
     assert snap.lower_bound == pytest.approx(res.lower_bound)
     assert snap.upper_bound == pytest.approx(res.upper_bound)
-    assert snap.input_is_stale == 0
+    # Synthetic bars end in 2023; evaluated at real "now" the anchor is years
+    # behind its expected schedule -> stale input flagged.
+    assert snap.input_is_stale == 1
     assert snap.realized_price is None
 
     # Verify explain_json matches explain dict

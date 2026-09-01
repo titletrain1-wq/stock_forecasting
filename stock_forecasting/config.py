@@ -11,8 +11,12 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     watchlist: str = "AAPL,NVDA,SPY,BTC-USD,ETH-USD"
-    poll_interval_crypto_sec: int = 60
-    poll_interval_equity_min: int = 5
+    # This is an end-of-day system: providers serve daily OHLCV bars, so polling
+    # is hourly, not sub-minute. Hourly is frequent enough to pick up a new daily
+    # bar (and an intraday forming crypto candle) shortly after it appears without
+    # burning the free-tier request budget re-fetching an unchanged bar.
+    poll_interval_crypto_sec: int = 3600
+    poll_interval_equity_min: int = 60
     backfill_years: int = 5
     db_path: str = "./data/app.db"
     retrain_hour_utc: int = 22
