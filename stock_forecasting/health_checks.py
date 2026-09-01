@@ -595,10 +595,6 @@ class HealthChecker:
                 "live_feed_equity",
                 "ws_connection",
                 "intraday_prune",
-                "check_live_feed_crypto",
-                "check_live_feed_equity",
-                "check_ws_connection",
-                "check_intraday_prune",
             }
 
         try:
