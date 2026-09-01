@@ -1,0 +1,325 @@
+"""Model training pipeline with walk-forward validation and artifact persistence."""
+
+import json
+import subprocess
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, ClassVar
+
+import joblib
+import numpy as np
+import pandas as pd
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.linear_model import Ridge
+from sklearn.preprocessing import StandardScaler
+from sqlmodel import Session, select
+
+from stock_forecasting.bar_store import BarRepository
+from stock_forecasting.features import FeatureBuilder
+from stock_forecasting.schema import ModelRun
+
+
+def _get_git_sha() -> str:
+    """Retrieve the current Git commit SHA, or 'unknown' if not in a git repo."""
+    try:
+        res = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        )
+        return res.stdout.strip()
+    except (subprocess.SubprocessError, OSError):
+        return "unknown"
+
+
+@dataclass
+class ModelArtifact:
+    """Container for trained model outputs, walk-forward validation metrics, and metadata."""
+
+    ticker: str
+    horizon: str
+    model_type: str
+    model_version: str
+    code_git_sha: str
+    wf_mae: float
+    wf_rmse: float
+    wf_dir_acc: float
+    wf_ci_cov: float
+    residual_std: float
+    feature_list: list[str]
+    hyperparams: dict[str, Any]
+    random_seed: int
+    artifact_path: str
+    model_run_id: int | None = None
+    model: Any = None
+    scaler: Any = None
+    metrics: dict[str, float] = field(default_factory=dict)
+
+
+class Trainer:
+    """Trains walk-forward predictive models for asset return forecasting."""
+
+    HORIZON_DAYS: ClassVar[dict[str, int]] = {"1d": 1, "5d": 5, "30d": 30}
+
+    def __init__(
+        self,
+        session: Session,
+        model_dir: str | Path = "./model_store",
+        bar_repo: BarRepository | None = None,
+        feature_builder: FeatureBuilder | None = None,
+    ) -> None:
+        """Initialize the Trainer.
+
+        Args:
+            session: Active SQLModel/SQLAlchemy session.
+            model_dir: Directory path for persisting .joblib model artifacts.
+            bar_repo: Optional BarRepository instance (defaults to new instance with session).
+            feature_builder: Optional FeatureBuilder instance (defaults to new FeatureBuilder).
+        """
+        self.session = session
+        self.model_dir = Path(model_dir)
+        self.bar_repo = bar_repo or BarRepository(session)
+        self.feature_builder = feature_builder or FeatureBuilder()
+
+    def train(
+        self,
+        ticker: str,
+        horizon: str,
+        model_type: str,
+        model_version: str = "1.0.0",
+        random_seed: int = 42,
+    ) -> ModelArtifact:
+        """Train a walk-forward forecasting model and persist artifact + DB record.
+
+        Args:
+            ticker: Asset ticker symbol (e.g. 'AAPL').
+            horizon: Forecast horizon key ('1d', '5d', '30d').
+            model_type: Model architecture ('ridge' or 'random_forest').
+            model_version: Semantic version string for the model artifact.
+            random_seed: Random seed for reproducibility.
+
+        Returns:
+            ModelArtifact containing model metadata, out-of-sample metrics, and artifact path.
+
+        Raises:
+            ValueError: If horizon or model_type is unsupported, or if historical data is insufficient.
+        """
+        if horizon not in self.HORIZON_DAYS:
+            raise ValueError(
+                f"Unsupported horizon: '{horizon}'. Must be one of {list(self.HORIZON_DAYS.keys())}"
+            )
+
+        norm_model_type = model_type.lower()
+        if norm_model_type not in ("ridge", "random_forest"):
+            raise ValueError(
+                f"Unsupported model_type: '{model_type}'. Must be 'ridge' or 'random_forest'"
+            )
+
+        # 1. Fetch historical bars
+        bars = self.bar_repo.get_range(ticker, "0000", "9999")
+        if not bars or len(bars) < 60:
+            raise ValueError(
+                f"Insufficient historical bars for ticker '{ticker}': found {len(bars) if bars else 0} bars "
+                "(minimum 60 required for indicator warmup and walk-forward split)."
+            )
+
+        bars_df = pd.DataFrame(
+            [
+                {
+                    "ts": b.ts,
+                    "open": b.open,
+                    "high": b.high,
+                    "low": b.low,
+                    "close": b.close,
+                    "adj_close": b.adj_close,
+                    "volume": b.volume,
+                }
+                for b in bars
+            ]
+        ).sort_values("ts").reset_index(drop=True)
+
+        # 2. Build features
+        features_df = self.feature_builder.build(bars_df, scale=False)
+        if features_df.empty:
+            raise ValueError(
+                f"Insufficient data: feature extraction produced 0 rows for ticker '{ticker}'."
+            )
+
+        # 3. Compute log return target: log(close_{t+h} / close_t)
+        h = self.HORIZON_DAYS[horizon]
+        if "adj_close" in bars_df.columns and bars_df["adj_close"].notna().any():
+            close_series = bars_df["adj_close"].fillna(bars_df["close"]).astype(float)
+        else:
+            close_series = bars_df["close"].astype(float)
+
+        target_series = np.log(close_series.shift(-h) / close_series)
+        target_col = f"target_{horizon}"
+        features_df[target_col] = target_series.loc[features_df.index]
+
+        valid_df = features_df.dropna(subset=[target_col]).copy()
+        min_required_samples = 10
+        if len(valid_df) < min_required_samples:
+            raise ValueError(
+                f"Insufficient valid samples ({len(valid_df)}) for ticker '{ticker}' and horizon '{horizon}' "
+                f"(minimum {min_required_samples} required after feature warmup and target shift)."
+            )
+
+        # 4. Perform walk-forward split (80% train, 20% OOS test)
+        n_samples = len(valid_df)
+        train_size = int(n_samples * 0.8)
+        if train_size < 4 or (n_samples - train_size) < 1:
+            raise ValueError(
+                f"Insufficient samples to create train/test split: total={n_samples}, train={train_size}."
+            )
+
+        train_df = valid_df.iloc[:train_size]
+        test_df = valid_df.iloc[train_size:]
+
+        feature_cols = [
+            c for c in self.feature_builder.feature_cols
+            if c in valid_df.columns and c != "ts"
+        ]
+
+        X_train = train_df[feature_cols].values
+        y_train = train_df[target_col].values
+        X_test = test_df[feature_cols].values
+        y_test = test_df[target_col].values
+
+        # Scale features using train set statistics only (Zero Lookahead)
+        wf_scaler = StandardScaler()
+        X_train_scaled = wf_scaler.fit_transform(X_train)
+        X_test_scaled = wf_scaler.transform(X_test)
+
+        # 5. Fit walk-forward model
+        if norm_model_type == "ridge":
+            hyperparams: dict[str, Any] = {"alpha": 1.0}
+            wf_model = Ridge(alpha=1.0)
+        else:
+            hyperparams = {"n_estimators": 100, "random_state": random_seed}
+            wf_model = RandomForestRegressor(n_estimators=100, random_state=random_seed)
+
+        wf_model.fit(X_train_scaled, y_train)
+
+        # 6. Compute OOS walk-forward metrics
+        y_pred = wf_model.predict(X_test_scaled)
+        wf_mae = float(np.mean(np.abs(y_test - y_pred)))
+        wf_rmse = float(np.sqrt(np.mean((y_test - y_pred) ** 2)))
+        wf_dir_acc = float(np.mean(np.sign(y_pred) == np.sign(y_test)))
+
+        residuals = y_test - y_pred
+        residual_std = float(np.std(residuals, ddof=1)) if len(residuals) > 1 else float(np.std(residuals))
+
+        if residual_std > 1e-12:
+            ci_lower = y_pred - 1.96 * residual_std
+            ci_upper = y_pred + 1.96 * residual_std
+            wf_ci_cov = float(np.mean((y_test >= ci_lower) & (y_test <= ci_upper)))
+        else:
+            wf_ci_cov = 1.0 if len(y_test) > 0 else 0.0
+
+        # Fit production model on entire valid dataset with full scaler
+        prod_scaler = StandardScaler()
+        X_full = valid_df[feature_cols].values
+        y_full = valid_df[target_col].values
+        X_full_scaled = prod_scaler.fit_transform(X_full)
+
+        if norm_model_type == "ridge":
+            prod_model = Ridge(alpha=1.0)
+        else:
+            prod_model = RandomForestRegressor(n_estimators=100, random_state=random_seed)
+        prod_model.fit(X_full_scaled, y_full)
+
+        # 7. Dump .joblib model artifact
+        dest_dir = self.model_dir / ticker / horizon / norm_model_type
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        artifact_path = dest_dir / f"{model_version}.joblib"
+
+        metrics_dict = {
+            "wf_mae": wf_mae,
+            "wf_rmse": wf_rmse,
+            "wf_dir_acc": wf_dir_acc,
+            "wf_ci_cov": wf_ci_cov,
+            "residual_std": residual_std,
+        }
+
+        train_start = str(bars_df["ts"].iloc[0])
+        train_end = str(bars_df["ts"].iloc[-1])
+
+        artifact_payload = {
+            "model": prod_model,
+            "scaler": prod_scaler,
+            "feature_list": feature_cols,
+            "ticker": ticker,
+            "horizon": horizon,
+            "model_type": norm_model_type,
+            "model_version": model_version,
+            "residual_std": residual_std,
+            "hyperparams": hyperparams,
+            "random_seed": random_seed,
+            "metrics": metrics_dict,
+            "train_start": train_start,
+            "train_end": train_end,
+        }
+        joblib.dump(artifact_payload, artifact_path)
+
+        # 8. Deactivate previous active ModelRun rows and insert new ModelRun
+        deactivate_stmt = select(ModelRun).where(
+            ModelRun.ticker == ticker,
+            ModelRun.horizon == horizon,
+            ModelRun.model_type == norm_model_type,
+            ModelRun.is_active == 1,
+        )
+        previous_runs = self.session.exec(deactivate_stmt).all()
+        for prev_run in previous_runs:
+            prev_run.is_active = 0
+            self.session.add(prev_run)
+
+        now_iso = datetime.now(UTC).isoformat()
+        git_sha = _get_git_sha()
+
+        model_run = ModelRun(
+            ticker=ticker,
+            horizon=horizon,
+            model_type=norm_model_type,
+            model_version=model_version,
+            code_git_sha=git_sha,
+            trained_at=now_iso,
+            train_start=train_start,
+            train_end=train_end,
+            hyperparams_json=json.dumps(hyperparams),
+            feature_list_json=json.dumps(feature_cols),
+            random_seed=random_seed,
+            wf_mae=wf_mae,
+            wf_rmse=wf_rmse,
+            wf_dir_acc=wf_dir_acc,
+            wf_ci_cov=wf_ci_cov,
+            residual_std=residual_std,
+            artifact_path=str(artifact_path),
+            is_active=1,
+        )
+        self.session.add(model_run)
+        self.session.commit()
+        self.session.refresh(model_run)
+
+        return ModelArtifact(
+            ticker=ticker,
+            horizon=horizon,
+            model_type=norm_model_type,
+            model_version=model_version,
+            code_git_sha=git_sha,
+            wf_mae=wf_mae,
+            wf_rmse=wf_rmse,
+            wf_dir_acc=wf_dir_acc,
+            wf_ci_cov=wf_ci_cov,
+            residual_std=residual_std,
+            feature_list=feature_cols,
+            hyperparams=hyperparams,
+            random_seed=random_seed,
+            artifact_path=str(artifact_path),
+            model_run_id=model_run.id,
+            model=prod_model,
+            scaler=prod_scaler,
+            metrics=metrics_dict,
+        )
