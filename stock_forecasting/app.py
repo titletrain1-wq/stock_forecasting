@@ -14,7 +14,18 @@ import streamlit as st
 from sqlmodel import Session, select
 
 from stock_forecasting.database import get_engine
-from stock_forecasting.schema import OhlcvBar, PredictionSnapshot, Ticker
+from stock_forecasting.panels import (
+    accuracy_rows,
+    build_explain_figure,
+    explain_contributions,
+    latest_snapshot,
+)
+from stock_forecasting.schema import (
+    AccuracyRecord,
+    OhlcvBar,
+    PredictionSnapshot,
+    Ticker,
+)
 from stock_forecasting.viz import DEFAULT_LATEST_HORIZONS, build_price_figure
 
 RANGE_DAYS: dict[str, int] = {"1M": 31, "3M": 93, "6M": 186, "1Y": 372}
@@ -53,6 +64,20 @@ def load_snapshots(engine, symbol: str) -> list[PredictionSnapshot]:
                 .order_by(PredictionSnapshot.made_at.asc())
             ).all()
         )
+
+
+def load_accuracy_records(
+    engine, symbol: str, *, scope: str = "ticker"
+) -> list[AccuracyRecord]:
+    """Return accuracy_records for a ticker (scope='ticker') or all (scope='global')."""
+    with Session(engine) as session:
+        stmt = select(AccuracyRecord).where(
+            AccuracyRecord.scope == scope,
+            AccuracyRecord.window == "all",
+        )
+        if scope == "ticker":
+            stmt = stmt.where(AccuracyRecord.ticker == symbol)
+        return list(session.exec(stmt).all())
 
 
 def add_ticker(engine, symbol: str) -> None:
@@ -142,6 +167,64 @@ def render_chart_panel(engine, symbol: str, ticker: Ticker) -> None:
     st.plotly_chart(fig, use_container_width=True)
 
 
+def render_accuracy_panel(engine, symbol: str) -> None:
+    """Accuracy table (one row per horizon) + one-line trust verdicts. Spec §9."""
+    st.subheader("Accuracy")
+    a1, a2 = st.columns(2)
+    scope = a1.radio(
+        "Scope", ["this ticker", "global"], horizontal=True, key="acc_scope"
+    )
+    scope_key = "ticker" if scope == "this ticker" else "global"
+    records = load_accuracy_records(engine, symbol, scope=scope_key)
+
+    models = sorted({r.model_type for r in records})
+    model = a2.selectbox("Model", models or ["ridge"], key="acc_model")
+    records = [r for r in records if r.model_type == model]
+
+    if not records:
+        st.caption(
+            "No graded predictions yet — the evaluator populates this once forecasts mature."
+        )
+        return
+
+    rows = accuracy_rows(records, ticker=symbol if scope_key == "ticker" else None)
+    st.dataframe(
+        [{k: v for k, v in row.items() if not k.startswith("_")} for row in rows],
+        hide_index=True,
+        use_container_width=True,
+    )
+    for row in rows:
+        st.caption(row["_sentence"])
+
+
+def render_explain_panel(engine, symbol: str) -> None:
+    """Collapsible 'Why this forecast?' — signed feature contributions. Spec §9."""
+    with st.expander("Why this forecast?", expanded=False):
+        snapshots = load_snapshots(engine, symbol)
+        if not snapshots:
+            st.caption("No forecast yet for this ticker.")
+            return
+        horizons = sorted({s.horizon for s in snapshots}, key=lambda h: (len(h), h))
+        models = sorted({s.model_type for s in snapshots})
+        e1, e2 = st.columns(2)
+        horizon = e1.selectbox("Horizon", horizons, key="explain_horizon")
+        model = e2.selectbox("Model", models, key="explain_model")
+
+        snap = latest_snapshot(snapshots, horizon=horizon, model_type=model)
+        if snap is None:
+            st.caption("No forecast for that horizon/model combination.")
+            return
+        st.caption(
+            f"Latest {horizon} {model} forecast made {snap.made_at[:16]} — "
+            f"predicted ${snap.predicted_price:,.2f}"
+        )
+        contribs = explain_contributions(snap.explain_json)
+        st.plotly_chart(
+            build_explain_figure(contribs, title=f"{symbol} {horizon} {model}"),
+            use_container_width=True,
+        )
+
+
 def main() -> None:
     """Render the single-screen forecast view."""
     st.set_page_config(layout="wide", page_title="Stock Forecasting")
@@ -158,6 +241,8 @@ def main() -> None:
     symbol = st.selectbox("Ticker", [t.symbol for t in tickers])
     ticker = next(t for t in tickers if t.symbol == symbol)
     render_chart_panel(engine, symbol, ticker)
+    render_accuracy_panel(engine, symbol)
+    render_explain_panel(engine, symbol)
 
 
 if __name__ == "__main__":

@@ -104,3 +104,4 @@
 
 
 
+- **Task 7.1 complete** (commit `<7.1 head>`): new `stock_forecasting/panels.py` — pure data shaping: `accuracy_rows()` (one row/horizon: MAE%/RMSE/dir%/CI-cov%/n + `verdict_label` ✅/❌ from `is_trustworthy`), `verdict_sentence()` (one-liner per spec §9), `latest_snapshot()`, `explain_contributions()` (parse `explain_json` → signed pairs sorted by |value|), `build_explain_figure()` (horizontal signed bar chart, green/red). `app.py`: `render_accuracy_panel` (scope this-ticker/global + model selector, `st.dataframe` + per-row caption) and `render_explain_panel` (collapsible "Why this forecast?", horizon+model selectors, Plotly bar). Wired into `main()` after the chart. +8 panel tests, +2 app tests. Suite 101/101, ruff clean, streamlit boots HTTP 200. NOTE: PostToolUse hook runs `ruff check --fix` — adding an import in one edit before its use lands in the next gets the import auto-stripped as F401; add import+usage together.

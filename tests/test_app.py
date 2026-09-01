@@ -20,7 +20,8 @@ def test_app_imports_cleanly() -> None:
     from stock_forecasting import app
 
     assert hasattr(app, "main")
-    assert hasattr(app, "render_chart_panel")
+    for fn in ("render_chart_panel", "render_accuracy_panel", "render_explain_panel"):
+        assert hasattr(app, fn)
     # streamlit-lightweight-charts must be gone
     assert "streamlit_lightweight_charts" not in sys.modules
 
@@ -51,3 +52,59 @@ def test_render_price_header_handles_empty_and_populated() -> None:
         SimpleNamespace(ts="2026-02-02T00:00:00Z", close=110.0),
     ]
     app.render_price_header("AAPL", bars)
+
+
+def test_load_accuracy_records_scoped(temp_db) -> None:
+    from sqlmodel import Session
+
+    from stock_forecasting import app
+    from stock_forecasting.schema import AccuracyRecord
+
+    with Session(temp_db) as s:
+        s.add(
+            AccuracyRecord(
+                scope="ticker",
+                ticker="AAPL",
+                horizon="1d",
+                model_type="ridge",
+                n=140,
+                mae=1.0,
+                rmse=2.0,
+                dir_acc=0.58,
+                ci_coverage=0.95,
+                mae_price_pct=0.02,
+                window="all",
+                is_trustworthy=1,
+                updated_at="2026-02-01T00:00:00Z",
+            )
+        )
+        s.add(
+            AccuracyRecord(
+                scope="global",
+                ticker=None,
+                horizon="1d",
+                model_type="ridge",
+                n=500,
+                mae=1.5,
+                rmse=2.5,
+                dir_acc=0.53,
+                ci_coverage=0.9,
+                mae_price_pct=0.03,
+                window="all",
+                is_trustworthy=0,
+                updated_at="2026-02-01T00:00:00Z",
+            )
+        )
+        s.commit()
+
+    t = app.load_accuracy_records(temp_db, "AAPL", scope="ticker")
+    assert [r.n for r in t] == [140]
+    g = app.load_accuracy_records(temp_db, "AAPL", scope="global")
+    assert [r.n for r in g] == [500]
+
+
+def test_render_panels_no_crash_on_empty_db(temp_db) -> None:
+    from stock_forecasting import app
+
+    app.render_accuracy_panel(temp_db, "AAPL")
+    app.render_explain_panel(temp_db, "AAPL")
