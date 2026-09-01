@@ -1,5 +1,78 @@
 # Changelog
 
+## v2.0.0 — 2026-09-02
+
+Real-time-capable display layer. The daily ML pipeline
+(`forecaster.py`, `trainer.py`, `features.py`, `evaluator.py`, `accuracy.py`)
+is **unchanged** — live prices never feed training, features, or the forecast
+ledger. Design: `docs/2026-09-01-realtime-v2-design.md`; plan + milestone gates:
+`docs/plans/2026-09-01-realtime-v2.md`. Branch built locally, tagged `v2.0.0`.
+
+### Added
+
+- **Intraday storage (M0).** New tables `intraday_bars` (short-retention
+  sub-daily OHLCV buckets, `is_provisional` flag, worker-pruned) and
+  `live_quotes` (one row per ticker, the current-price anchor). `ohlcv_bars`
+  and the ML ledger are untouched. 8 new `Settings` fields + `.env.example`.
+- **Coinbase WebSocket feed (M1–M2).** `live_feed.CoinbaseWSClient` — the
+  worker owns one keyless Advanced-Trade WS connection (`ticker_batch` +
+  `heartbeats`) on a daemon thread; each tick is a short transaction writing
+  `live_quotes` + the forming `intraday_bars` bucket. Auto-reconnect with
+  capped backoff; `coinbase_rest_candles()` REST fallback. A WAL per-tick-write
+  contention spike (`docs/spikes/2026-09-01-M2-wal-contention.md`) confirmed the
+  per-tick DB write model is safe (0 lock errors, write p95 ≈ 5 ms).
+- **Equity intraday poller (M3).** `providers/yfinance.get_intraday_bars()` +
+  `job_ingest_equity_intraday` — 5-minute bars, ~15-minute delayed.
+- **Two-path health (M4).** `HealthChecker.compute_system_status(display_only_checks=…)`
+  — display-path checks (`live_feed_crypto`, `live_feed_equity`, `ws_connection`,
+  `intraday_prune`) contribute at most `DEGRADED`, so a live-feed outage never
+  marks the training/prediction core `CRITICAL`. The training-data path keeps
+  the v1.0.1 trading-calendar freshness model. `job_check_ws_idle` falls back to
+  REST when the socket goes quiet.
+- **Streaming chart (M5).** `app.py` wraps the price header + chart in
+  `st.fragment(run_every=_refresh_for(asset_class))` (2 s crypto / 15 s equity),
+  stable `key="live_price_chart"`, `uirevision=True`.
+  `viz.add_live_price_line()` overlays a `live` line + a faded provisional
+  `forming` candle. Equity charts show a `🟡 15-min delayed` badge.
+- **ML overlay integrity fence (M6).** `viz.CI_DISCLAIMER` (verbatim calibration
+  disclaimer) on every figure + the app caption + `KNOWN_LIMITATIONS.md` §5.
+  `tests/test_ml_overlay_integrity.py`: mutating every `live_quotes.price`
+  leaves `lower_bound` / `upper_bound` and every ribbon point byte-identical —
+  only the `live` trace moves. The band is always anchored to `P_close`.
+- **Chaos suite + docs (M7).** `tests/test_chaos.py` covers WS drop
+  mid-session (reconnect), WS silent / heartbeat stop (REST fallback + feed
+  `DEGRADED`), Mac sleep/wake, equity 429 storm, and the close-time reconcile
+  step.
+
+### Deviations from the design (recorded)
+
+- **M2 — `ingestion.py` thin wrappers skipped.** The design (§6.2) sketched
+  `upsert_live_quote` / `ingest_intraday_bar` wrappers as the intraday ingest
+  seam. `IntradayRepository` / `LiveQuoteRepository` in `intraday_store.py` are
+  the seam directly, called from the worker's `_on_tick` and
+  `job_ingest_equity_intraday`. v1's `ingestion.py` orchestrates provider
+  failover for the daily path; the intraday path does WS-idle→REST in the
+  worker, so a second wrapper layer added indirection with no failover value.
+  See `docs/ARCHITECTURE.md`.
+
+### Known limitations
+
+- **Crypto has no true 00:00 UTC close.** The "daily close" is the provider's
+  cutoff bar, so the intraday-line → forecast-ribbon handover can show a small
+  visual step when the cutoff close differs from the last live tick. Equities
+  (real 16:00 ET close) do not. See `KNOWN_LIMITATIONS.md` §0 / §5.
+- **Two processes.** `worker.py` and `streamlit run app.py` are separate OS
+  processes; without the worker, no live ticks stream.
+- Real-time paid equity feeds, intraday forecasting models, and trade signals
+  are out of scope for v2.0.0.
+
+### Upgrade note
+
+Adds two tables (`intraday_bars`, `live_quotes`) — run the worker once to create
+them. The Coinbase WebSocket is keyless; no new API key is required. New
+`Settings` fields have safe defaults (see `.env.example`). Model artifacts under
+`model_store/` are unchanged and remain gitignored.
+
 ## v1.0.1 — 2026-09-01
 
 Post-release reliability fixes from the live-run health analysis

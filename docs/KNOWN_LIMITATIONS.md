@@ -1,19 +1,22 @@
-# Known Limitations & Operational Constraints — stock_forecasting v1.0.1
+# Known Limitations & Operational Constraints — stock_forecasting v2.0.0
 
-This document outlines the known operational boundaries, provider caveats, and design constraints of `stock_forecasting` v1.0.1.
+This document outlines the known operational boundaries, provider caveats, and design constraints of `stock_forecasting` v2.0.0.
 
-## 0. End-of-Day, Not Real-Time
+## 0. Real-Time Display vs. Daily Training Models (v2 Hybrid Architecture)
 
-- **Bar granularity**: Every provider (yfinance, Coinbase, Tiingo, Finnhub, CoinGecko) serves **daily** OHLCV bars. There is no intraday or streaming feed.
-- **Poll cadence**: The worker polls hourly by default (`poll_interval_crypto_sec=3600`, `poll_interval_equity_min=60`). Hourly is frequent enough to pick up a new daily bar shortly after it appears; polling faster only re-fetches an unchanged bar and burns the free-tier request budget.
-- **Freshness model**: `check_freshness` judges each ticker's latest bar against its expected **trading-calendar** schedule — NYSE sessions (`pandas-market-calendars`) for equities, one bar per UTC day for crypto — not against a wall-clock age. A bar is only CRITICAL when genuinely overdue (equity: ≥2 missed sessions; crypto: ≥3 days behind). An equity feed showing yesterday's close before today's open is NOMINAL.
-- **Forming crypto candle**: Coinbase returns a *forming* (partial) candle for the current UTC day, so the latest crypto bar in the DB may be an incomplete day until it settles at 00:00Z. Features and the forecast anchor can therefore be built from a partial-day bar. (Tracked as a follow-up; see release notes.)
-- **Crypto has no real daily close (v2 streaming chart)**: crypto trades 24/7 with no true 00:00 UTC close, so the "daily close" is only the provider's cutoff bar. When the streaming chart hands over from the intraday live line to the forecast ribbon (which is anchored to `P_close`), a small visible step can appear if the provider's daily close differs from the last live tick. Equities have a real 16:00 ET close and do not show this. The forecast band/ribbon are never moved by live ticks — the ML core is frozen and stays anchored to `P_close`.
+- **Dual-Path Architecture**: `stock_forecasting` v2.0.0 decouples the real-time visualization layer from the daily ML forecasting pipeline. Crypto quotes stream in real time via Coinbase WebSocket, and equities poll at 5-minute intervals (~15-minute delayed). Daily OHLCV bars remain the sole source of truth for ML training, feature extraction, and forecast evaluation.
+- **Delayed Equities**: Free-tier equity intraday bars from yfinance are ~15 minutes delayed. Intraday polling occurs on a 5-minute schedule with a 20-minute provisional lookback window. Real-time paid equity feeds (e.g. Polygon / IEX) are outside v2.0.0 scope.
+- **Provisional Forming Candles**: The currently forming intraday candle (`1m` for crypto, `5m` for equity) is tracked in `intraday_bars` with `is_provisional = 1` and continuously updated on new ticks. Once the bucket interval elapses, the candle is finalized (`is_provisional = 0`).
+- **Display-Only Live Feed**: Intraday ticks and quotes are strictly display-only. Live price movements never trigger model retraining, feature recomputation, or dynamic re-anchoring of the forecast ribbon / CI band.
+- **Calibration to Daily Close (`P_close`)**: Statistical confidence intervals ($\pm 1.96 \sigma_h$) are calibrated against completed daily session closes. The CI band is anchored to `P_close`, never `P_live`.
+- **Crypto No-True-Close**: Crypto markets trade continuously 24/7 without a hard session close. Daily bars use provider 00:00 UTC cutoff boundaries. A minor visual step may appear at the junction between the intraday live trace and the daily-anchored forecast ribbon if the cutoff close differs from the live tick.
 
-## 1. Single-User / Local Architectural Scope
+## 1. Single-User & Process Architecture
 
+- **Two-Process Model**: `worker.py` (ingestion, WebSocket feed, scheduler, retrain) and `streamlit run app.py` (visualization UI) run as two independent OS processes communicating strictly through SQLite WAL. If only Streamlit is started without the worker, live ticks will not stream. A single-command supervisor process is a possible future enhancement.
 - **Deployment**: Designed specifically as a single-user, local application. There is no multi-tenant authentication, RBAC, or remote cluster synchronization.
-- **Database Engine**: Uses SQLite (`./data/app.db`) in WAL mode (`busy_timeout=5000`). Designed for concurrent local worker and UI access, not high-concurrency remote writer pools.
+- **Database Engine**: Uses SQLite (`./data/app.db`) in WAL mode (`busy_timeout=5000`). Concurrent worker writes and 2-second UI fragment reads operate lock-free under WAL concurrency.
+- **Intraday ingest seam (M2 design deviation)**: the design's proposed `ingestion.py` thin wrappers (`upsert_live_quote`, `ingest_intraday_bar`) were not built. `IntradayRepository` / `LiveQuoteRepository` are the intraday ingest seam directly, called from the worker's `_on_tick` and `job_ingest_equity_intraday`. `ingestion.py` still owns provider failover for the **daily** path only. See `docs/ARCHITECTURE.md` and `CHANGELOG.md` v2.0.0.
 
 ## 2. Provider API Constraints & Quirks
 

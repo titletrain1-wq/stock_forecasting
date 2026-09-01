@@ -48,3 +48,19 @@
 4. **Resilient Data Ingestion**: `IngestionService` instruments all API calls through `LinkMonitor` and guards requests with `CircuitBreaker`. On provider failure (HTTP 429/500), requests automatically fail over to secondary providers.
 5. **Walk-Forward Validation**: Models are trained using `TimeSeriesSplit(n_splits=5)` expanding-window walk-forward validation. Each model is trained directly on the h-day cumulative log return, so the walk-forward residual standard deviation $\sigma_{\text{residual}}$ is already a h-horizon quantity; the 95% band is $\text{predicted\_price} \times e^{\pm 1.96\,\sigma_{\text{residual}}}$ with no additional $\sqrt{h}$ scaling (applying it twice was fixed in v1.0.1).
 6. **Integrated System Health Monitoring**: `HealthChecker` continuously assesses 8 health dimensions (freshness, latency, error rates, data gaps, quarantine count, scheduler heartbeat, clock skew, and daily API quotas).
+
+## v2.0.0 — Real-Time Display Layer
+
+v2 adds a live display path that is **fully decoupled** from the daily ML pipeline. The ML core (`forecaster.py`, `trainer.py`, `features.py`, `evaluator.py`, `accuracy.py`) is unchanged; live prices never feed training, features, or the forecast ledger.
+
+- **Storage**: two new tables — `intraday_bars` (short-retention sub-daily OHLCV buckets, worker-pruned after `intraday_retention_days`) and `live_quotes` (one row per ticker, the current-price anchor). `ohlcv_bars` remains the sole ML source of truth.
+- **Crypto feed — `live_feed.CoinbaseWSClient`**: the worker owns a single Coinbase Advanced-Trade WebSocket connection (`ticker_batch` + `heartbeats`, keyless) on a daemon thread. Each tick runs a short transaction: upsert `live_quotes` + extend the forming `intraday_bars` bucket. Auto-reconnect with capped backoff. `coinbase_rest_candles()` is the REST fallback.
+- **Equity feed**: `providers/yfinance.get_intraday_bars()` polls 5-minute bars (~15-minute delayed) on a 5-minute worker job (`job_ingest_equity_intraday`).
+- **WS-idle fallback**: `job_check_ws_idle` — if no tick/heartbeat for `ws_idle_timeout_sec`, the worker pulls REST candles and marks the crypto feed `DEGRADED` until the socket recovers.
+- **Streaming chart**: `app.py` wraps the price header + chart in `st.fragment(run_every=_refresh_for(asset_class))` (2 s crypto / 15 s equity), stable `key="live_price_chart"`, `uirevision=True`. `viz.add_live_price_line()` overlays a `live` scatter + a faded provisional `forming` candle. The forecast ribbon + CI band stay anchored to `P_close` — see `viz.CI_DISCLAIMER` and `tests/test_ml_overlay_integrity.py`.
+- **Two-path health**: `HealthChecker.compute_system_status(display_only_checks=...)` — display-path checks (`live_feed_crypto`, `live_feed_equity`, `ws_connection`, `intraday_prune`) can contribute at most `DEGRADED`, so a live-feed outage never marks the training/prediction core `CRITICAL`. The training-data path keeps the v1.0.1 trading-calendar freshness model.
+- **Two-process model**: `worker.py` and `streamlit run app.py` are independent OS processes communicating only through SQLite WAL. Without the worker running, no live ticks stream.
+
+### M2 deviation from the design (recorded)
+
+The design (`docs/2026-09-01-realtime-v2-design.md` §6.2) sketched thin `ingestion.py` wrappers (`upsert_live_quote`, `ingest_intraday_bar`) as the intraday ingest seam. **This was skipped**: `IntradayRepository` / `LiveQuoteRepository` in `intraday_store.py` *are* the seam directly, called from the worker's `_on_tick` and `job_ingest_equity_intraday`. v1's `ingestion.py` orchestrates provider failover for the daily path; the intraday path does WS-idle→REST in the worker instead, so a second wrapper layer added indirection with no failover value.
