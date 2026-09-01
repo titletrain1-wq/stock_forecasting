@@ -8,7 +8,9 @@ import pytest
 from sqlmodel import Session, select
 
 from stock_forecasting.bar_store import BarRepository
+from stock_forecasting.ingestion import IngestionService
 from stock_forecasting.providers.base import Bar
+from stock_forecasting.providers.fake import FakeProvider
 from stock_forecasting.providers.yfinance import YFinanceProvider
 from stock_forecasting.schema import OhlcvBar, QuarantineBar, Ticker
 
@@ -293,3 +295,156 @@ def test_yfinance_provider_mocked() -> None:
 
     # Mock get_latest_bars with 0 lookback
     assert provider.get_latest_bars("AAPL", lookback=0) == []
+
+
+def test_ingestion_service_poll(db_session: Session) -> None:
+    """Verify IngestionService polls active watchlist tickers and stores bars."""
+    t1 = Ticker(
+        symbol="AAPL",
+        asset_class="equity",
+        display_name="Apple Inc.",
+        provider="fake",
+        provider_symbol="AAPL",
+        price_basis="adjusted",
+        added_at="2026-01-01T00:00:00Z",
+        active=1,
+    )
+    t2 = Ticker(
+        symbol="MSFT",
+        asset_class="equity",
+        display_name="Microsoft Corp.",
+        provider="fake",
+        provider_symbol="MSFT",
+        price_basis="adjusted",
+        added_at="2026-01-01T00:00:00Z",
+        active=1,
+    )
+    t3 = Ticker(
+        symbol="GOOG",
+        asset_class="equity",
+        display_name="Alphabet Inc.",
+        provider="fake",
+        provider_symbol="GOOG",
+        price_basis="adjusted",
+        added_at="2026-01-01T00:00:00Z",
+        active=0,
+    )
+    db_session.add_all([t1, t2, t3])
+    db_session.commit()
+
+    service = IngestionService(
+        session=db_session,
+        providers={"fake": FakeProvider()},
+    )
+
+    results = service.poll_watchlist()
+    assert "AAPL" in results
+    assert "MSFT" in results
+    assert "GOOG" not in results
+
+    assert results["AAPL"]["inserted"] > 0
+    assert results["MSFT"]["inserted"] > 0
+
+    # Verify bars written to database
+    aapl_bars = db_session.exec(
+        select(OhlcvBar).where(OhlcvBar.ticker == "AAPL")
+    ).all()
+    assert len(aapl_bars) == results["AAPL"]["inserted"]
+
+    # Poll single ticker directly
+    single_res = service.poll_ticker("AAPL", lookback=2)
+    assert single_res["symbol"] == "AAPL"
+    # Idempotent: re-polling same recent bars inserts 0 new rows
+    assert single_res["inserted"] == 0
+
+
+def test_ingestion_service_backfill(db_session: Session) -> None:
+    """Verify IngestionService historical backfill for a ticker."""
+    ticker = Ticker(
+        symbol="BTC",
+        asset_class="crypto",
+        display_name="Bitcoin",
+        provider="fake",
+        provider_symbol="BTC-USD",
+        price_basis="raw",
+        added_at="2026-01-01T00:00:00Z",
+        active=1,
+    )
+    db_session.add(ticker)
+    db_session.commit()
+
+    service = IngestionService(
+        session=db_session,
+        providers={"fake": FakeProvider()},
+    )
+
+    res = service.backfill("BTC", years=2)
+    assert res["symbol"] == "BTC"
+    assert res["inserted"] > 700  # 2 years of daily bars
+
+    btc_bars = db_session.exec(
+        select(OhlcvBar).where(OhlcvBar.ticker == "BTC")
+    ).all()
+    assert len(btc_bars) == res["inserted"]
+    assert all(b.source == "fake" for b in btc_bars)
+
+
+def test_ingestion_service_missing_ticker_or_provider(
+    db_session: Session,
+) -> None:
+    """Verify IngestionService handles missing tickers, providers, and provider errors gracefully."""
+    t_unsupported = Ticker(
+        symbol="UNK",
+        asset_class="equity",
+        display_name="Unknown Provider Co.",
+        provider="unregistered_provider",
+        provider_symbol="UNK",
+        price_basis="adjusted",
+        added_at="2026-01-01T00:00:00Z",
+        active=1,
+    )
+    t_failing = Ticker(
+        symbol="FAIL",
+        asset_class="equity",
+        display_name="Failing Provider Co.",
+        provider="error_provider",
+        provider_symbol="FAIL",
+        price_basis="adjusted",
+        added_at="2026-01-01T00:00:00Z",
+        active=1,
+    )
+    db_session.add_all([t_unsupported, t_failing])
+    db_session.commit()
+
+    service = IngestionService(
+        session=db_session,
+        providers={"error_provider": FakeProvider(return_429=True)},
+    )
+
+    # 1. Missing ticker in database
+    poll_missing = service.poll_ticker("NONEXISTENT")
+    assert poll_missing["inserted"] == 0
+    assert "not found" in poll_missing.get("error", "").lower()
+
+    backfill_missing = service.backfill("NONEXISTENT")
+    assert backfill_missing["inserted"] == 0
+    assert "not found" in backfill_missing.get("error", "").lower()
+
+    # 2. Unregistered provider
+    poll_unk = service.poll_ticker("UNK")
+    assert poll_unk["inserted"] == 0
+    assert "not found" in poll_unk.get("error", "").lower()
+
+    backfill_unk = service.backfill("UNK")
+    assert backfill_unk["inserted"] == 0
+    assert "not found" in backfill_unk.get("error", "").lower()
+
+    # 3. Provider throwing exception (e.g. rate limit 429)
+    poll_fail = service.poll_ticker("FAIL")
+    assert poll_fail["inserted"] == 0
+    assert "429" in poll_fail.get("error", "")
+
+    backfill_fail = service.backfill("FAIL")
+    assert backfill_fail["inserted"] == 0
+    assert "429" in backfill_fail.get("error", "")
+
