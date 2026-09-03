@@ -68,8 +68,8 @@ def run_once() -> None:
         logger.info("All jobs completed successfully.")
         sys.exit(0)
 
-    except Exception as exc:
-        logger.exception("Fatal error during job execution: %s", exc)
+    except Exception:
+        logger.exception("Fatal error during job execution")
         sys.exit(1)
 
 

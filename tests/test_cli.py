@@ -50,38 +50,44 @@ def test_run_scheduler_starts_and_handles_interrupt() -> None:
         mock_scheduler = MagicMock()
         mock_scheduler_class.return_value = mock_scheduler
 
-        with patch("time.sleep") as mock_sleep:
-            with patch("stock_forecasting.cli.sys.exit") as mock_exit:
-                # Raise KeyboardInterrupt on second call to sleep
-                mock_sleep.side_effect = [None, KeyboardInterrupt()]
+        with (
+            patch("time.sleep") as mock_sleep,
+            patch("stock_forecasting.cli.sys.exit") as mock_exit,
+        ):
+            # Raise KeyboardInterrupt on second call to sleep
+            mock_sleep.side_effect = [None, KeyboardInterrupt()]
 
-                from stock_forecasting.cli import run_scheduler
+            from stock_forecasting.cli import run_scheduler
 
-                run_scheduler()
+            run_scheduler()
 
-                # Verify scheduler started and stopped
-                mock_scheduler.start.assert_called_once()
-                mock_scheduler.stop.assert_called_once_with(wait=True)
-                mock_exit.assert_called_once_with(0)
+            # Verify scheduler started and stopped
+            mock_scheduler.start.assert_called_once()
+            mock_scheduler.stop.assert_called_once_with(wait=True)
+            mock_exit.assert_called_once_with(0)
 
 
 def test_main_routes_to_run_once_with_flag() -> None:
     """Verify main() routes to run_once() when --once flag is present."""
-    with patch("stock_forecasting.cli.run_once") as mock_run_once:
-        with patch("sys.argv", ["cli.py", "--once"]):
-            from stock_forecasting.cli import main
+    with (
+        patch("stock_forecasting.cli.run_once") as mock_run_once,
+        patch("sys.argv", ["cli.py", "--once"]),
+    ):
+        from stock_forecasting.cli import main
 
-            main()
+        main()
 
-            mock_run_once.assert_called_once()
+        mock_run_once.assert_called_once()
 
 
 def test_main_routes_to_run_scheduler_without_flag() -> None:
     """Verify main() routes to run_scheduler() when no --once flag."""
-    with patch("stock_forecasting.cli.run_scheduler") as mock_run_scheduler:
-        with patch("sys.argv", ["cli.py"]):
-            from stock_forecasting.cli import main
+    with (
+        patch("stock_forecasting.cli.run_scheduler") as mock_run_scheduler,
+        patch("sys.argv", ["cli.py"]),
+    ):
+        from stock_forecasting.cli import main
 
-            main()
+        main()
 
-            mock_run_scheduler.assert_called_once()
+        mock_run_scheduler.assert_called_once()
