@@ -12,6 +12,10 @@ Spec §9 "The overlay":
      green / red / grey by direction hit / miss / not-yet-matured.
   4. Latest forecast — dashed anchor->forecast line + a widening CI band
      (``lower_bound`` / ``upper_bound``) via ``go.Scatter(fill="tonexty")``.
+
+Spec §7 "Technical indicators":
+  Price pane: SMA20 + SMA50 + Bollinger Bands (20, 2σ)
+  Sub-panes: RSI14 (70/30 guide lines), MACD(12,26,9), Volume + Volume SMA20
 """
 
 from __future__ import annotations
@@ -19,6 +23,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, Protocol
 
+import pandas as pd
+import pandas_ta as ta
 import plotly.graph_objects as go
 
 ACTUAL_COLOR = "#2962FF"
@@ -91,6 +97,57 @@ def _marker_color(snap: _SnapshotLike) -> str:
     return HIT_COLOR if snap.is_direction_hit else MISS_COLOR
 
 
+def _compute_indicators(bars: list[_BarLike]) -> dict[str, Any]:
+    """Compute technical indicators (SMA, Bollinger, RSI, MACD, Volume SMA) from bars.
+
+    Returns a dict with 'df' (index-aligned DataFrame) and indicator Series.
+    """
+    if not bars:
+        return {}
+
+    # Convert bars to DataFrame
+    b_sorted = sorted(bars, key=lambda b: str(b.ts))
+    data = {
+        'ts': [b.ts for b in b_sorted],
+        'open': [b.open for b in b_sorted],
+        'high': [b.high for b in b_sorted],
+        'low': [b.low for b in b_sorted],
+        'close': [b.close for b in b_sorted],
+        'volume': [getattr(b, 'volume', 0) for b in b_sorted],
+    }
+    df = pd.DataFrame(data)
+
+    result = {'df': df, 'ts': df['ts'].tolist()}
+
+    try:
+        # Price pane indicators
+        result['sma20'] = ta.sma(df['close'], length=20).tolist()
+        result['sma50'] = ta.sma(df['close'], length=50).tolist()
+        bbands = ta.bbands(df['close'], length=20, std=2)
+        if bbands is not None and len(bbands.columns) >= 3:
+            result['bb_upper'] = bbands.iloc[:, 2].tolist()
+            result['bb_lower'] = bbands.iloc[:, 0].tolist()
+
+        # RSI sub-pane
+        result['rsi'] = ta.rsi(df['close'], length=14).tolist()
+
+        # MACD sub-pane
+        macd = ta.macd(df['close'], fast=12, slow=26, signal=9)
+        if macd is not None and len(macd.columns) >= 3:
+            result['macd_line'] = macd.iloc[:, 0].tolist()
+            result['macd_signal'] = macd.iloc[:, 1].tolist()
+            result['macd_hist'] = macd.iloc[:, 2].tolist()
+
+        # Volume sub-pane
+        result['volume'] = df['volume'].tolist()
+        result['volume_sma'] = ta.sma(df['volume'], length=20).tolist()
+    except Exception:
+        # Gracefully handle indicator computation errors (e.g., insufficient data)
+        pass
+
+    return result
+
+
 def _latest_per_horizon(
     snapshots: Sequence[_SnapshotLike], horizons: Sequence[str]
 ) -> dict[str, _SnapshotLike]:
@@ -113,8 +170,13 @@ def build_price_figure(
     show_actual_candles: bool = False,
     latest_horizons: Sequence[str] = DEFAULT_LATEST_HORIZONS,
     title: str = "",
+    show_sma: bool = True,
+    show_bollinger: bool = True,
+    show_rsi: bool = True,
+    show_macd: bool = True,
+    show_volume: bool = True,
 ) -> go.Figure:
-    """Assemble the actual + forecast-overlay Plotly figure.
+    """Assemble the actual + forecast-overlay Plotly figure with optional technical indicators.
 
     Args:
         bars: OHLCV bars (need ``ts`` + OHLC attributes), any order.
@@ -125,12 +187,20 @@ def build_price_figure(
         show_actual_candles: draw actual price as candles instead of a line.
         latest_horizons: horizons to draw a latest-forecast dashed line + CI band for.
         title: chart title.
+        show_sma: show SMA20 + SMA50 on price pane.
+        show_bollinger: show Bollinger Bands on price pane.
+        show_rsi: show RSI14 as sub-pane.
+        show_macd: show MACD as sub-pane.
+        show_volume: show Volume + Volume SMA as sub-pane.
 
     Returns:
         A ``plotly.graph_objects.Figure``. Empty inputs yield an annotated blank figure.
     """
     fig = go.Figure()
     horizons = tuple(latest_horizons)
+
+    # Compute indicators once for the whole dataset
+    indicators = _compute_indicators(list(bars)) if bars else {}
 
     if bars:
         b_sorted = sorted(bars, key=lambda b: str(b.ts))
@@ -159,6 +229,55 @@ def build_price_figure(
                     hovertemplate="%{x}<br>close %{y:.2f}<extra></extra>",
                 )
             )
+
+        # Add price-pane indicators (SMA, Bollinger)
+        if indicators and 'ts' in indicators:
+            ts = indicators['ts']
+            if show_sma and 'sma20' in indicators:
+                fig.add_trace(
+                    go.Scatter(
+                        x=ts,
+                        y=indicators['sma20'],
+                        name="SMA20",
+                        mode="lines",
+                        line={"color": "rgba(200, 150, 100, 0.8)", "width": 1},
+                        hovertemplate="%{x}<br>SMA20 %{y:.2f}<extra></extra>",
+                    )
+                )
+            if show_sma and 'sma50' in indicators:
+                fig.add_trace(
+                    go.Scatter(
+                        x=ts,
+                        y=indicators['sma50'],
+                        name="SMA50",
+                        mode="lines",
+                        line={"color": "rgba(150, 100, 200, 0.8)", "width": 1},
+                        hovertemplate="%{x}<br>SMA50 %{y:.2f}<extra></extra>",
+                    )
+                )
+            if show_bollinger and 'bb_upper' in indicators:
+                fig.add_trace(
+                    go.Scatter(
+                        x=ts,
+                        y=indicators['bb_upper'],
+                        name="BB Upper",
+                        mode="lines",
+                        line={"color": "rgba(100, 100, 200, 0.5)", "width": 1, "dash": "dot"},
+                        hovertemplate="%{x}<br>BB Upper %{y:.2f}<extra></extra>",
+                    )
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=ts,
+                        y=indicators['bb_lower'],
+                        name="BB Lower",
+                        mode="lines",
+                        line={"color": "rgba(100, 100, 200, 0.5)", "width": 1, "dash": "dot"},
+                        fill="tonexty",
+                        fillcolor="rgba(100, 100, 200, 0.1)",
+                        hovertemplate="%{x}<br>BB Lower %{y:.2f}<extra></extra>",
+                    )
+                )
 
     if ribbon_horizon:
         ribbon = sorted(
@@ -255,6 +374,96 @@ def build_price_figure(
             )
         )
 
+    # Add sub-pane indicators (RSI, MACD, Volume) with secondary y-axes
+    num_subpanes = sum([show_rsi, show_macd, show_volume])
+    subpane_height = 150 if num_subpanes > 0 else 0
+    subpane_idx = 2  # Start at y2 (y1 is price pane)
+
+    if indicators and 'ts' in indicators:
+        ts = indicators['ts']
+
+        if show_rsi and 'rsi' in indicators:
+            yaxis_name = f"yaxis{subpane_idx}"
+            fig.add_trace(
+                go.Scatter(
+                    x=ts,
+                    y=indicators['rsi'],
+                    name="RSI14",
+                    mode="lines",
+                    line={"color": "rgba(100, 200, 100, 0.8)", "width": 1},
+                    yaxis=yaxis_name,
+                    hovertemplate="%{x}<br>RSI %{y:.1f}<extra></extra>",
+                )
+            )
+            # Add 70/30 guide lines
+            for level, level_name in [(70, "70"), (30, "30")]:
+                fig.add_hline(y=level, line_dash="dash", line_color="rgba(100, 200, 100, 0.3)",
+                              annotation_text=level_name, yaxis=yaxis_name)
+            subpane_idx += 1
+
+        if show_macd and 'macd_line' in indicators:
+            yaxis_name = f"yaxis{subpane_idx}"
+            fig.add_trace(
+                go.Scatter(
+                    x=ts,
+                    y=indicators['macd_line'],
+                    name="MACD",
+                    mode="lines",
+                    line={"color": "rgba(200, 100, 100, 0.8)", "width": 1},
+                    yaxis=yaxis_name,
+                    hovertemplate="%{x}<br>MACD %{y:.4f}<extra></extra>",
+                )
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=ts,
+                    y=indicators['macd_signal'],
+                    name="MACD Signal",
+                    mode="lines",
+                    line={"color": "rgba(150, 100, 150, 0.8)", "width": 1},
+                    yaxis=yaxis_name,
+                    hovertemplate="%{x}<br>Signal %{y:.4f}<extra></extra>",
+                )
+            )
+            fig.add_trace(
+                go.Bar(
+                    x=ts,
+                    y=indicators['macd_hist'],
+                    name="MACD Hist",
+                    marker={"color": ["green" if h >= 0 else "red" for h in indicators['macd_hist']]},
+                    yaxis=yaxis_name,
+                    hovertemplate="%{x}<br>Hist %{y:.4f}<extra></extra>",
+                    showlegend=False,
+                )
+            )
+            subpane_idx += 1
+
+        if show_volume and 'volume' in indicators:
+            yaxis_name = f"yaxis{subpane_idx}"
+            fig.add_trace(
+                go.Bar(
+                    x=ts,
+                    y=indicators['volume'],
+                    name="Volume",
+                    marker={"color": "rgba(100, 100, 200, 0.5)"},
+                    yaxis=yaxis_name,
+                    hovertemplate="%{x}<br>Vol %{y:.0f}<extra></extra>",
+                )
+            )
+            if 'volume_sma' in indicators:
+                fig.add_trace(
+                    go.Scatter(
+                        x=ts,
+                        y=indicators['volume_sma'],
+                        name="Volume SMA20",
+                        mode="lines",
+                        line={"color": "rgba(100, 100, 200, 0.9)", "width": 1},
+                        yaxis=yaxis_name,
+                        hovertemplate="%{x}<br>Vol SMA %{y:.0f}<extra></extra>",
+                    )
+                )
+            subpane_idx += 1
+
     layout: dict[str, Any] = {
         "title": title,
         "xaxis_title": "Date",
@@ -263,12 +472,22 @@ def build_price_figure(
         "legend": {"orientation": "h", "yanchor": "bottom", "y": 1.02},
         "margin": {"l": 50, "r": 20, "t": 50, "b": 40},
         "xaxis": {"rangeslider": {"visible": False}},
-        "height": 480,
+        "height": 480 + subpane_height,
         # uirevision keeps zoom / pan / hover state across @st.fragment tick
         # refreshes (M5 streaming chart) — without it every live update snaps
         # the view back to the default range.
         "uirevision": True,
     }
+
+    # Configure secondary y-axes for sub-panes
+    for i in range(2, subpane_idx):
+        yaxis_key = f"yaxis{i}"
+        layout[yaxis_key] = {
+            "title": f"Axis {i - 1}",
+            "overlaying": "y",
+            "side": "right" if i % 2 == 0 else "left",
+        }
+
     fig.update_layout(**layout)
 
     # M6 overlay-integrity fence: the calibration disclaimer rides on every

@@ -193,6 +193,14 @@ def render_chart_panel(engine, symbol: str, ticker: Ticker) -> None:
         default=list(DEFAULT_LATEST_HORIZONS),
     )
 
+    # Indicator toggles
+    i1, i2, i3 = st.columns(3)
+    show_sma = i1.checkbox("SMA20/50", value=True, key="show_sma")
+    show_bollinger = i1.checkbox("Bollinger Bands", value=True, key="show_bollinger")
+    show_rsi = i2.checkbox("RSI14", value=True, key="show_rsi")
+    show_macd = i2.checkbox("MACD", value=True, key="show_macd")
+    show_volume = i3.checkbox("Volume", value=True, key="show_volume")
+
     bars = load_bars(engine, symbol, RANGE_DAYS[range_label])
     snapshots = load_snapshots(engine, symbol)
 
@@ -215,6 +223,11 @@ def render_chart_panel(engine, symbol: str, ticker: Ticker) -> None:
             show_actual_candles=use_candles,
             latest_horizons=tuple(latest_horizons),
             title=f"{symbol} · actual vs forecast",
+            show_sma=show_sma,
+            show_bollinger=show_bollinger,
+            show_rsi=show_rsi,
+            show_macd=show_macd,
+            show_volume=show_volume,
         )
         add_live_price_line(fig, quotes, intraday)
         # Stable key -> Streamlit reuses the existing Plotly canvas instead of
