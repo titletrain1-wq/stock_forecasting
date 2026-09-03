@@ -72,11 +72,9 @@ def get_engine(db_path: str | None = None) -> Engine:
             params.append("secure=true")
         url = f"sqlite+libsql://{base}?{'&'.join(params)}"
         try:
-            return create_sqlmodel_engine(
-                url,
-                echo=False,
-                connect_args={"timeout": 5},
-            )
+            # NB: no connect_args={"timeout": ...} here - the libSQL dbapi's
+            # connect() does not accept a 'timeout' kwarg (that is sqlite3-only).
+            return create_sqlmodel_engine(url, echo=False)
         except ImportError as e:
             if "libsql" in str(e).lower():
                 raise RuntimeError(
