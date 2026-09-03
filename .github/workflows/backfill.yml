@@ -1,0 +1,24 @@
+name: Historical backfill (one-off)
+
+on:
+  workflow_dispatch:
+    inputs:
+      years:
+        description: "Years of daily history to fetch per ticker"
+        required: false
+        default: "2"
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --all-groups
+      - run: uv run python -m stock_forecasting.cli --backfill --years "${{ inputs.years }}"
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}

@@ -81,6 +81,60 @@ def run_once() -> None:
     sys.exit(1 if len(failures) == len(jobs) else 0)
 
 
+def run_backfill(years: int = 2) -> None:
+    """One-off: fetch `years` of daily history for every active ticker, then
+    retrain + forecast so the chart has a forecast line and the accuracy panel
+    has something to grade. The hourly `--once` pass only polls recent bars.
+    """
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+    logger.info("Starting historical backfill (%d years)", years)
+
+    from sqlmodel import Session, select
+
+    from stock_forecasting.database import seed_watchlist
+    from stock_forecasting.ingestion import IngestionService
+    from stock_forecasting.schema import Ticker
+    from stock_forecasting.worker import WorkerScheduler
+
+    try:
+        scheduler = WorkerScheduler()
+        seed_watchlist(scheduler.engine)
+    except Exception:
+        logger.exception("Could not construct WorkerScheduler - aborting")
+        sys.exit(1)
+
+    with Session(scheduler.engine) as session:
+        symbols = [
+            t.symbol
+            for t in session.exec(select(Ticker).where(Ticker.active == 1)).all()
+        ]
+        svc = IngestionService(session, scheduler.providers)
+        for sym in symbols:
+            try:
+                res = svc.backfill(sym, years=years)
+                logger.info("backfill %s -> %s", sym, res)
+            except Exception:
+                logger.exception("backfill %s failed", sym)
+        session.commit()
+
+    for name, fn in (
+        ("job_retrain_nightly", scheduler.job_retrain_nightly),
+        ("job_evaluate_hourly", scheduler.job_evaluate_hourly),
+        ("job_heartbeat", scheduler.job_heartbeat),
+    ):
+        logger.info("Running %s...", name)
+        try:
+            fn()
+        except Exception:
+            logger.exception("%s failed", name)
+
+    logger.info("Backfill complete.")
+    sys.exit(0)
+
+
 def run_scheduler() -> None:
     """Run the background job scheduler indefinitely (default mode).
 
@@ -111,8 +165,16 @@ def run_scheduler() -> None:
 
 
 def main() -> None:
-    """CLI entry point: route to run_once or run_scheduler."""
-    if "--once" in sys.argv or "run-once" in sys.argv:
+    """CLI entry point: route to backfill, run_once, or run_scheduler."""
+    if "--backfill" in sys.argv:
+        years = 2
+        if "--years" in sys.argv:
+            try:
+                years = int(sys.argv[sys.argv.index("--years") + 1])
+            except (IndexError, ValueError):
+                logger.warning("Bad --years value, defaulting to %d", years)
+        run_backfill(years)
+    elif "--once" in sys.argv or "run-once" in sys.argv:
         run_once()
     else:
         run_scheduler()
