@@ -14,19 +14,19 @@ import pandas as pd
 import pytest
 from sqlmodel import Session
 
-from stock_forecasting.intraday_trainer import (
-    _as_of_join_funding,
-    _fetch_intraday_bars_5m,
-    _filter_closed_bar_anchors,
-    backfill_intraday_bars,
+from stock_forecasting.intraday_pipeline import (
+    as_of_join_funding,
+    fetch_intraday_bars_5m,
+    filter_closed_bar_anchors,
 )
+from stock_forecasting.intraday_trainer import backfill_intraday_bars
 from stock_forecasting.schema import IntradayBarsHistory, Ticker
 
 
 class TestCoinbaseBackfill:
     """Test 1: Coinbase REST backfill shape and deduplication."""
 
-    def test_fetch_intraday_bars_5m_mock_response_shape(self) -> None:
+    def testfetch_intraday_bars_5m_mock_response_shape(self) -> None:
         """Test that mocked Coinbase REST returns ~8,760 5m bars for 365 days."""
         # Create a mock provider
         mock_provider = MagicMock()
@@ -63,13 +63,13 @@ class TestCoinbaseBackfill:
         mock_client.get.return_value = mock_response
 
         # Call the function
-        bars = _fetch_intraday_bars_5m(mock_provider, "BTC-USD", start_date, end_date)
+        bars = fetch_intraday_bars_5m(mock_provider, "BTC-USD", start_date, end_date)
 
         # Verify shape
         assert len(bars) == bar_count, f"Expected {bar_count} bars, got {len(bars)}"
         assert all("ts" in b and "o" in b and "c" in b for b in bars)
 
-    def test_fetch_intraday_bars_5m_empty_response(self) -> None:
+    def testfetch_intraday_bars_5m_empty_response(self) -> None:
         """Test that empty Coinbase response returns empty list."""
         mock_provider = MagicMock()
         mock_provider.resolve_product_id.return_value = "BTC-USD"
@@ -81,13 +81,13 @@ class TestCoinbaseBackfill:
         mock_response.json.return_value = []
         mock_client.get.return_value = mock_response
 
-        bars = _fetch_intraday_bars_5m(
+        bars = fetch_intraday_bars_5m(
             mock_provider, "BTC-USD", date(2026, 9, 1), date(2026, 9, 2)
         )
 
         assert len(bars) == 0
 
-    def test_fetch_intraday_bars_5m_handles_invalid_data(self) -> None:
+    def testfetch_intraday_bars_5m_handles_invalid_data(self) -> None:
         """Test that invalid candle data is skipped gracefully."""
         mock_provider = MagicMock()
         mock_provider.resolve_product_id.return_value = "BTC-USD"
@@ -107,7 +107,7 @@ class TestCoinbaseBackfill:
         mock_response.json.return_value = mock_bars
         mock_client.get.return_value = mock_response
 
-        bars = _fetch_intraday_bars_5m(
+        bars = fetch_intraday_bars_5m(
             mock_provider, "BTC-USD", date(2026, 9, 1), date(2026, 9, 2)
         )
 
@@ -143,7 +143,7 @@ class TestFundingAsOfJoin:
         funding_df = pd.DataFrame(funding_data)
 
         # Perform as-of join
-        _, result = _as_of_join_funding(bars_df, funding_df)
+        _, result = as_of_join_funding(bars_df, funding_df)
 
         # Verify:
         # - Hour 0 (ts=00:00): should use nothing (no prior rate) -> NaN
@@ -173,7 +173,7 @@ class TestFundingAsOfJoin:
         bars_df = pd.DataFrame(bars_data)
         funding_df = pd.DataFrame(columns=["ts", "funding_rate"])
 
-        _, result = _as_of_join_funding(bars_df, funding_df)
+        _, result = as_of_join_funding(bars_df, funding_df)
 
         assert pd.isna(result.iloc[0]["funding_rate"])
 
@@ -181,7 +181,7 @@ class TestFundingAsOfJoin:
 class TestAnchorFiltering:
     """Test 3: Closed-bar anchor filtering."""
 
-    def test_filter_closed_bar_anchors_1h_and_4h(self) -> None:
+    def testfilter_closed_bar_anchors_1h_and_4h(self) -> None:
         """Test that anchor filter keeps only :00 (1h) and :00/:04/:08/:12/:16/:20 (4h) times."""
         # Create data at various minute markers
         base = datetime(2026, 9, 1, 0, 0, 0, tzinfo=UTC)
@@ -211,7 +211,7 @@ class TestAnchorFiltering:
         df = pd.DataFrame(df_data)
 
         # Filter
-        result = _filter_closed_bar_anchors(df)
+        result = filter_closed_bar_anchors(df)
 
         # Expected: 0, 4, 8, 12, 16, 20 minutes, and the 01:00 (60 minutes)
         expected_minutes = {0, 4, 8, 12, 16, 20, 60}
@@ -228,10 +228,10 @@ class TestAnchorFiltering:
             is_4h_anchor = minute in [4, 8, 12, 16, 20] or (hour % 4 == 0 and minute == 0)
             assert is_1h_anchor or is_4h_anchor, f"Invalid anchor at {row['ts']}"
 
-    def test_filter_closed_bar_anchors_empty(self) -> None:
+    def testfilter_closed_bar_anchors_empty(self) -> None:
         """Test that empty DataFrame returns empty result."""
         df = pd.DataFrame(columns=["ts", "o", "h", "l", "c", "v"])
-        result = _filter_closed_bar_anchors(df)
+        result = filter_closed_bar_anchors(df)
         assert result.empty
 
 
@@ -286,7 +286,7 @@ class TestEndToEnd:
                 return result
 
             # Patch the fetch function
-            with patch("stock_forecasting.intraday_trainer._fetch_intraday_bars_5m", side_effect=mock_fetch_fn):
+            with patch("stock_forecasting.intraday_trainer.fetch_intraday_bars_5m", side_effect=mock_fetch_fn):
                 with patch("stock_forecasting.intraday_trainer._fetch_funding_rates_from_db") as MockFunding:
                     # Return empty funding (for simplicity)
                     MockFunding.return_value = pd.DataFrame(columns=["ts", "funding_rate"])
@@ -353,7 +353,7 @@ class TestEndToEnd:
                     "v": 100.0,
                 }]
 
-            with patch("stock_forecasting.intraday_trainer._fetch_intraday_bars_5m", side_effect=mock_fetch_fn):
+            with patch("stock_forecasting.intraday_trainer.fetch_intraday_bars_5m", side_effect=mock_fetch_fn):
                 with patch("stock_forecasting.intraday_trainer._fetch_funding_rates_from_db") as MockFunding:
                     MockFunding.return_value = pd.DataFrame(columns=["ts", "funding_rate"])
 
