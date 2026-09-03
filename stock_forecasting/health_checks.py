@@ -28,6 +28,15 @@ from stock_forecasting.schema import (
     Ticker,
 )
 
+# Map job types to their associated providers
+# Based on worker.py job definitions
+JOB_TYPE_TO_PROVIDERS = {
+    "job_ingest_crypto": {"CoinGecko", "Coinbase", "dYdX", "fake"},
+    "job_ingest_equities": {"yfinance", "Tiingo", "Finnhub", "fake"},
+    "job_ingest_equity_intraday": {"Coinbase"},
+    "job_ingest_derivatives": {"dYdX"},
+}
+
 
 def _parse_utc(ts_str: str) -> datetime:
     """Parse an ISO-8601 timestamp string into a timezone-aware UTC datetime."""
@@ -35,6 +44,41 @@ def _parse_utc(ts_str: str) -> datetime:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=UTC)
     return dt.astimezone(UTC)
+
+
+def _get_active_providers(session: Session, active_threshold_min: int = 60) -> set[str]:
+    """Get the set of currently-active providers based on recent job heartbeats.
+
+    A provider is considered active if it's used by a job that has pulsed within
+    the last `active_threshold_min` minutes. This filters out stale providers
+    that are no longer being polled.
+
+    Args:
+        session: Database session
+        active_threshold_min: Threshold in minutes for considering a job "active"
+
+    Returns:
+        Set of provider names that are actively used by recent jobs
+    """
+    now = datetime.now(UTC)
+    threshold = now - timedelta(minutes=active_threshold_min)
+
+    # Get all job heartbeats
+    heartbeats = session.exec(
+        select(SystemHeartbeat).where(SystemHeartbeat.last_pulse_ts.isnot(None))
+    ).all()
+
+    active_providers: set[str] = set()
+    for heartbeat in heartbeats:
+        if heartbeat.last_pulse_ts is None:
+            continue
+        pulse_time = _parse_utc(heartbeat.last_pulse_ts)
+        if pulse_time >= threshold:
+            job_type = heartbeat.job_type
+            if job_type in JOB_TYPE_TO_PROVIDERS:
+                active_providers.update(JOB_TYPE_TO_PROVIDERS[job_type])
+
+    return active_providers
 
 
 @dataclass
@@ -127,10 +171,18 @@ class HealthChecker:
 
     def check_latency(self) -> HealthCheckResult:
         """Check RTT latency metrics (p50 <800ms, p95 <2.5s, jitter <1.5s)."""
-        metrics = self.session.exec(select(LinkMetrics)).all()
+        all_metrics = self.session.exec(select(LinkMetrics)).all()
+        active_providers = _get_active_providers(self.session)
+
+        # If no active providers detected, use all metrics (fallback for setup/testing)
+        if active_providers:
+            metrics = [m for m in all_metrics if m.provider in active_providers]
+        else:
+            metrics = all_metrics
+
         if not metrics:
             return HealthCheckResult(
-                "latency", "NOMINAL", "No link latency metrics recorded."
+                "latency", "NOMINAL", "No active provider latency metrics."
             )
 
         details: dict[str, Any] = {}
@@ -170,10 +222,18 @@ class HealthChecker:
 
     def check_error_rate(self) -> HealthCheckResult:
         """Check provider consecutive failures (>=3 degraded, >=5 down)."""
-        metrics = self.session.exec(select(LinkMetrics)).all()
+        all_metrics = self.session.exec(select(LinkMetrics)).all()
+        active_providers = _get_active_providers(self.session)
+
+        # If no active providers detected, use all metrics (fallback for setup/testing)
+        if active_providers:
+            metrics = [m for m in all_metrics if m.provider in active_providers]
+        else:
+            metrics = all_metrics
+
         if not metrics:
             return HealthCheckResult(
-                "error_rate", "NOMINAL", "No provider link metrics found."
+                "error_rate", "NOMINAL", "No active provider link metrics found."
             )
 
         details: dict[str, Any] = {}
@@ -373,10 +433,18 @@ class HealthChecker:
 
     def check_quota(self) -> HealthCheckResult:
         """Check API provider daily quota usage (>=0.8 degraded, >=0.95 critical)."""
-        metrics = self.session.exec(select(LinkMetrics)).all()
+        all_metrics = self.session.exec(select(LinkMetrics)).all()
+        active_providers = _get_active_providers(self.session)
+
+        # If no active providers detected, use all metrics (fallback for setup/testing)
+        if active_providers:
+            metrics = [m for m in all_metrics if m.provider in active_providers]
+        else:
+            metrics = all_metrics
+
         if not metrics:
             return HealthCheckResult(
-                "quota", "NOMINAL", "No provider quota metrics recorded."
+                "quota", "NOMINAL", "No active provider quota metrics recorded."
             )
 
         details: dict[str, Any] = {}
