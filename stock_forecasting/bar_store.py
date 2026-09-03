@@ -102,56 +102,47 @@ class BarRepository:
                 valid_bars.append(bar)
 
         if valid_bars:
-            # Count how many are genuinely new (for the return value / logging).
-            # The write below is idempotent regardless, so a stale read here is
-            # harmless.
-            timestamps = [b.ts for b in valid_bars]
-            existing_ts = set(
-                self.session.exec(
-                    select(OhlcvBar.ts).where(
-                        OhlcvBar.ticker == ticker,
-                        OhlcvBar.interval == interval,
-                        OhlcvBar.ts.in_(timestamps),
-                    )
-                ).all()
-            )
-            inserted_count = sum(1 for b in valid_bars if b.ts not in existing_ts)
-
             # Single idempotent upsert for the whole batch. INSERT .. ON CONFLICT
-            # avoids the read-then-write race and the RETURNING-based batch
-            # insert path, which libSQL/Turso rejects on a duplicate and which
-            # then poisons the session for every later ticker.
-            params = [
-                {
-                    "ticker": ticker,
-                    "interval": interval,
-                    "ts": b.ts,
-                    "open": b.open,
-                    "high": b.high,
-                    "low": b.low,
-                    "close": b.close,
-                    "adj_close": b.adj_close,
-                    "volume": b.volume,
-                    "source": source,
-                    "ingested_at": now_str,
-                }
-                for b in valid_bars
-            ]
-            self.session.connection().execute(
-                text(
-                    "INSERT INTO ohlcv_bars "
-                    "(ticker, interval, ts, open, high, low, close, adj_close, "
-                    " volume, source, ingested_at) "
-                    "VALUES (:ticker, :interval, :ts, :open, :high, :low, :close, "
-                    " :adj_close, :volume, :source, :ingested_at) "
-                    "ON CONFLICT(ticker, interval, ts) DO UPDATE SET "
-                    " open=excluded.open, high=excluded.high, low=excluded.low, "
-                    " close=excluded.close, adj_close=excluded.adj_close, "
-                    " volume=excluded.volume, source=excluded.source, "
-                    " ingested_at=excluded.ingested_at"
-                ),
-                params,
+            # avoids (a) the read-then-write race, (b) a large `ts IN (...)`
+            # pre-check query, and (c) SQLAlchemy's RETURNING-based batch insert,
+            # which libSQL/Turso rejects on a duplicate and which then poisons
+            # the session for every later ticker. Chunked so one request stays
+            # small over a remote (Turso) connection.
+            stmt = text(
+                "INSERT INTO ohlcv_bars "
+                "(ticker, interval, ts, open, high, low, close, adj_close, "
+                " volume, source, ingested_at) "
+                "VALUES (:ticker, :interval, :ts, :open, :high, :low, :close, "
+                " :adj_close, :volume, :source, :ingested_at) "
+                "ON CONFLICT(ticker, interval, ts) DO UPDATE SET "
+                " open=excluded.open, high=excluded.high, low=excluded.low, "
+                " close=excluded.close, adj_close=excluded.adj_close, "
+                " volume=excluded.volume, source=excluded.source, "
+                " ingested_at=excluded.ingested_at"
             )
+            conn = self.session.connection()
+            chunk = 200
+            for start in range(0, len(valid_bars), chunk):
+                conn.execute(
+                    stmt,
+                    [
+                        {
+                            "ticker": ticker,
+                            "interval": interval,
+                            "ts": b.ts,
+                            "open": b.open,
+                            "high": b.high,
+                            "low": b.low,
+                            "close": b.close,
+                            "adj_close": b.adj_close,
+                            "volume": b.volume,
+                            "source": source,
+                            "ingested_at": now_str,
+                        }
+                        for b in valid_bars[start : start + chunk]
+                    ],
+                )
+            inserted_count = len(valid_bars)
 
         self.session.commit()
         return inserted_count
