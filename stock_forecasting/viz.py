@@ -523,12 +523,16 @@ def build_price_figure(
 
     fig.update_layout(
         title=title,
+        xaxis_title="Date",
         hovermode="x unified",
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02},
         margin={"l": 50, "r": 20, "t": 50, "b": 40},
         height=600 if num_subpanes > 0 else 480,
         uirevision=True,  # uirevision keeps zoom / pan / hover state across @st.fragment tick refreshes
     )
+
+    # Disable rangeslider for candlestick traces (compress the pane stack)
+    fig.update_xaxes(rangeslider={"visible": False})
 
     # M6 overlay-integrity fence: the calibration disclaimer rides on every
     # figure. The band stays P_close-anchored; live ticks only move the "live"

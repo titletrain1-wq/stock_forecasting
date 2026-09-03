@@ -315,3 +315,10 @@ def test_subpane_y_axis_titles() -> None:
 def test_price_pane_y_axis_title() -> None:
     fig = build_price_figure(BARS, [], show_rsi=False, show_macd=False, show_volume=False, latest_horizons=())
     assert fig.layout.yaxis.title.text == "Price"
+
+
+def test_xaxis_title_and_rangeslider_disabled() -> None:
+    """Verify xaxis title and rangeslider visibility for proper pane layout."""
+    fig = build_price_figure(BARS, [], show_actual_candles=True, latest_horizons=())
+    assert fig.layout.xaxis.title.text == "Date"
+    assert fig.layout.xaxis.rangeslider.visible is False
