@@ -157,7 +157,8 @@ def backfill_intraday_bars(
 
 CODE_VERSION = "m3-1"
 
-_HORIZON_BARS = {"1h": 12, "4h": 48}  # 5-minute bars per horizon
+CRYPTO_HORIZONS = ("15m", "1h", "4h")
+_HORIZON_BARS = {"15m": 3, "1h": 12, "4h": 48}  # 5-minute bars per horizon
 _EMBARGO_BARS = 288  # 24h of 5-minute bars, applied after the test window
 
 
@@ -203,6 +204,8 @@ def _conditional_vol(bars_df: pd.DataFrame, window: int = 12) -> pd.Series:
 def _horizon_anchor_mask(ts: pd.Series, horizon: str) -> pd.Series:
     """Closed-bar anchor mask for a single horizon (no cross-horizon mixing)."""
     minute = ts.dt.minute
+    if horizon == "15m":
+        return minute.isin((0, 15, 30, 45))
     if horizon == "1h":
         return minute == 0
     if horizon == "4h":
@@ -217,7 +220,7 @@ def train_intraday_models(
     test_days: int = 14,
     models_dir: str | Path | None = None,
 ) -> dict:
-    """M3: train the crypto intraday log-return regressors (BTC/ETH x 1h/4h).
+    """M3: train the crypto intraday log-return regressors (BTC/ETH x 15m/1h/4h).
 
     Per (ticker, horizon): LGBMRegressor primary + Ridge fallback on the
     continuous log-return target, a StandardScaler fit on train, and a
@@ -253,7 +256,7 @@ def train_intraday_models(
 
         cond_vol = _conditional_vol(bars_df)
 
-        for horizon in ("1h", "4h"):
+        for horizon in CRYPTO_HORIZONS:
             entry = _train_one(
                 ticker, horizon, bars_df, features_df, cond_vol, test_days, models_dir
             )

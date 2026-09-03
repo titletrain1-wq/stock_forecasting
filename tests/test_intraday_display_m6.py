@@ -103,7 +103,7 @@ def test_end_to_end_train_write_display(tmp_path):
     write_intraday_forecasts(session, tickers=(TICKER,), models_dir=tmp_path)
 
     forecasts = load_intraday_forecasts(engine, TICKER)
-    assert {f.horizon for f in forecasts} == {"1h", "4h"}
+    assert {f.horizon for f in forecasts} == {"15m", "1h", "4h"}
     fig = build_intraday_forecast_figure([], forecasts)
     assert any(t.name == "1h forecast" for t in fig.data)
     session.close()

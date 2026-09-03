@@ -28,13 +28,13 @@ def test_writer_creates_one_snapshot_per_horizon(tmp_path):
     session, mdir = _prepared(tmp_path)
     written = write_intraday_forecasts(session, tickers=(TICKER,), models_dir=mdir)
 
-    assert {w["horizon"] for w in written} == {"1h", "4h"}
+    assert {w["horizon"] for w in written} == {"15m", "1h", "4h"}
     rows = session.exec(
         select(IntradayPredictionSnapshot).where(
             IntradayPredictionSnapshot.ticker == TICKER
         )
     ).all()
-    assert len(rows) == 2
+    assert len(rows) == 3
 
     for r in rows:
         assert np.isfinite(r.predicted_return) and abs(r.predicted_return) < 0.5
@@ -60,7 +60,7 @@ def test_writer_is_idempotent_on_same_anchor(tmp_path):
             IntradayPredictionSnapshot.ticker == TICKER
         )
     ).all()
-    assert len(rows) == 2  # INSERT OR IGNORE dedup on (ticker, horizon, anchor_ts)
+    assert len(rows) == 3  # INSERT OR IGNORE dedup on (ticker, horizon, anchor_ts)
 
 
 def test_writer_anchor_is_a_closed_bar_boundary(tmp_path):

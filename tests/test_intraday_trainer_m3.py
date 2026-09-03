@@ -1,4 +1,4 @@
-"""M3 tests: intraday log-return regressor training (crypto 1h/4h).
+"""M3 tests: intraday log-return regressor training (crypto 15m/1h/4h).
 
 Covers the real M3 requirements (Jim's bounce B1-B6):
 - regressor on a continuous log-return target (not a classifier)
@@ -103,18 +103,21 @@ def _seed(session: Session, *, days: int = 90, seed: int = 7) -> None:
 
 def test_horizon_anchor_mask_is_horizon_specific() -> None:
     ts = pd.Series(pd.date_range("2026-01-01", periods=48 * 4, freq="5min", tz="UTC"))
+    m15 = _horizon_anchor_mask(ts, "15m")
     m1h = _horizon_anchor_mask(ts, "1h")
     m4h = _horizon_anchor_mask(ts, "4h")
 
+    assert ts[m15].dt.minute.isin((0, 15, 30, 45)).all()
     assert (ts[m1h].dt.minute == 0).all()
     assert (ts[m4h].dt.minute == 0).all()
     assert (ts[m4h].dt.hour % 4 == 0).all()
-    # 4h anchors are a strict subset of 1h anchors
-    assert m4h.sum() < m1h.sum()
+    # strict nesting: 4h ⊂ 1h ⊂ 15m
+    assert m4h.sum() < m1h.sum() < m15.sum()
     assert (m4h & ~m1h).sum() == 0
-    # spacing: consecutive 1h anchors are 12 bars apart -> non-overlapping 1h labels
-    pos = np.flatnonzero(m1h.to_numpy())
-    assert set(np.diff(pos).tolist()) == {12}
+    assert (m1h & ~m15).sum() == 0
+    # spacing: consecutive anchors are k bars apart -> non-overlapping labels
+    assert set(np.diff(np.flatnonzero(m1h.to_numpy())).tolist()) == {12}
+    assert set(np.diff(np.flatnonzero(m15.to_numpy())).tolist()) == {3}
 
 
 def test_conditional_vol_no_lookahead() -> None:
@@ -163,9 +166,9 @@ def trained(tmp_path_factory):
     return meta, mdir
 
 
-def test_metadata_has_real_finite_metrics_for_both_horizons(trained) -> None:
+def test_metadata_has_real_finite_metrics_for_all_horizons(trained) -> None:
     meta, _ = trained
-    assert set(meta) == {f"{TICKER}-1h", f"{TICKER}-4h"}
+    assert set(meta) == {f"{TICKER}-15m", f"{TICKER}-1h", f"{TICKER}-4h"}
     for key, entry in meta.items():
         for field in ("mae", "rmse", "directional_pct", "ci_cover_pct"):
             val = entry[field]
@@ -180,7 +183,7 @@ def test_metadata_has_real_finite_metrics_for_both_horizons(trained) -> None:
 
 def test_all_artefacts_persisted_with_design_names(trained) -> None:
     _, mdir = trained
-    for horizon in ("1h", "4h"):
+    for horizon in ("15m", "1h", "4h"):
         for stem in (
             f"intraday_lgb_btc_usd_{horizon}",
             f"intraday_ridge_btc_usd_fallback_{horizon}",
@@ -190,7 +193,7 @@ def test_all_artefacts_persisted_with_design_names(trained) -> None:
             assert (mdir / f"{stem}.pkl").exists(), f"missing {stem}.pkl"
     assert (mdir / "metadata_crypto.json").exists()
     meta_on_disk = json.loads((mdir / "metadata_crypto.json").read_text())
-    assert meta_on_disk.keys() == {f"{TICKER}-1h", f"{TICKER}-4h"}
+    assert meta_on_disk.keys() == {f"{TICKER}-15m", f"{TICKER}-1h", f"{TICKER}-4h"}
 
 
 def test_persisted_model_predicts_continuous_returns(trained) -> None:

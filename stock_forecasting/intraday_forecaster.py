@@ -23,6 +23,7 @@ from sqlmodel import Session, select
 from stock_forecasting.intraday_features import IntradayFeatureBuilder
 from stock_forecasting.intraday_trainer import (
     CODE_VERSION,
+    CRYPTO_HORIZONS,
     ResidualVolModel,  # noqa: F401  (needed for unpickling)
     _conditional_vol,
     _horizon_anchor_mask,
@@ -33,7 +34,11 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MODELS_DIR = Path("stock_forecasting/models/intraday")
 CRYPTO_TICKERS = ("BTC-USD", "ETH-USD")
-HORIZON_DELTA = {"1h": timedelta(hours=1), "4h": timedelta(hours=4)}
+HORIZON_DELTA = {
+    "15m": timedelta(minutes=15),
+    "1h": timedelta(hours=1),
+    "4h": timedelta(hours=4),
+}
 _FEATURE_WINDOW_BARS = 600  # 5m bars pulled to build features for the latest anchor
 
 
@@ -105,7 +110,7 @@ def _recent_funding(session: Session, ticker: str, since: datetime) -> pd.DataFr
 def write_intraday_forecasts(
     session: Session,
     tickers: tuple[str, ...] = CRYPTO_TICKERS,
-    horizons: tuple[str, ...] = ("1h", "4h"),
+    horizons: tuple[str, ...] = CRYPTO_HORIZONS,
     models_dir: str | Path | None = None,
 ) -> list[dict]:
     """Write one forecast snapshot per (ticker, horizon) for the latest closed bar.
