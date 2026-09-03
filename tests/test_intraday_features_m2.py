@@ -233,42 +233,39 @@ class TestFundingZScore:
     """Test funding rate z-score feature (no lookahead)."""
 
     def test_funding_zscore_no_forward_fill_lookahead(self) -> None:
-        """Test that funding z-score uses backward as-of join (no lookahead).
+        """Test funding z-score with 14-day rolling window on DAILY funding rates.
 
-        If we have funding rates at specific times, a bar at time t should
-        only use the last funding rate published at or before t, never after.
+        Implementation uses one funding rate per day (from crypto_derivatives table).
         """
         builder = IntradayFeatureBuilder()
 
         base = datetime(2026, 9, 1, 0, 0, 0, tzinfo=UTC)
-        # 300 bars = 25 hours worth of 5m bars
+        # 15 days of 5m bars to have 14 days of history for rolling z-score
         bars = []
-        for i in range(300):
-            ts = base + timedelta(minutes=5 * i)
-            close = 45000.0 + (i % 100) * 5.0  # Oscillate to avoid trend
-            bars.append(
-                {
-                    "ts": ts.isoformat().replace("+00:00", "Z"),
-                    "open": close - 2,
-                    "high": close + 5,
-                    "low": close - 5,
-                    "close": close,
-                    "volume": 50.0,
-                }
-            )
+        for day in range(15):
+            for 5min_in_day in range(288):  # 24h * 12 bars/h
+                ts = base + timedelta(days=day, minutes=5 * 5min_in_day)
+                close = 45000.0 + day * 10.0
+                bars.append(
+                    {
+                        "ts": ts.isoformat().replace("+00:00", "Z"),
+                        "open": close - 2,
+                        "high": close + 5,
+                        "low": close - 5,
+                        "close": close,
+                        "volume": 50.0,
+                    }
+                )
         bars_df = pd.DataFrame(bars)
 
-        # Funding rates: one every hour at specific times
-        # Time 0h: rate 0.0001
-        # Time 1h: rate 0.0002 (published at 60 minutes)
-        # Time 2h: rate 0.0003 (published at 120 minutes)
+        # Funding rates: ONE per day at 00:00:00Z (matching crypto_derivatives daily)
         funding = []
-        for hour in range(25):
-            ts = base + timedelta(minutes=60 * hour)
+        for day in range(15):
+            ts = base + timedelta(days=day)
             funding.append(
                 {
                     "ts": ts.isoformat().replace("+00:00", "Z"),
-                    "funding_rate": 0.0001 + hour * 0.00005,
+                    "funding_rate": 0.0001 + day * 0.00001,
                 }
             )
         funding_df = pd.DataFrame(funding)
@@ -276,14 +273,11 @@ class TestFundingZScore:
         # Build features with funding
         features = builder.build_features("BTC-USD", bars_df, funding_df)
 
-        # At bar 0 (time 0:00): no prior funding rate → NaN or 0
-        # At bar 12 (time 1:00, exactly when 1h rate published): should use 1h rate
-        # At bar 11 (time 55m, before 1h rate): should use 0h rate
-        # This validates backward as-of join (no forward-fill into future)
-
-        # After warmup (288 bars = 24h), z-scores should exist
-        if len(features) > 288:
-            assert not np.isnan(features["funding_zscore"].iloc[288])
+        # First 14 days should have rolling z-scores (min_periods=1 in rolling window)
+        # Day 14 (index 14*288 onwards) should have non-NaN z-scores
+        day_14_start = 14 * 288
+        if len(features) > day_14_start:
+            assert not np.isnan(features["funding_zscore"].iloc[day_14_start])
 
     def test_funding_zscore_with_empty_funding(self) -> None:
         """Test that features handle missing funding gracefully."""
