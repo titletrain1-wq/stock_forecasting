@@ -28,13 +28,13 @@ from stock_forecasting.schema import (
     Ticker,
 )
 
-# Map job types to their associated providers
-# Based on worker.py job definitions
+# Map job types to their associated providers (lowercase to match LinkMetrics.provider)
+# Based on worker.py job definitions and _init_default_providers()
 JOB_TYPE_TO_PROVIDERS = {
-    "job_ingest_crypto": {"CoinGecko", "Coinbase", "dYdX", "fake"},
-    "job_ingest_equities": {"yfinance", "Tiingo", "Finnhub", "fake"},
-    "job_ingest_equity_intraday": {"Coinbase"},
-    "job_ingest_derivatives": {"dYdX"},
+    "job_ingest_crypto": {"coingecko", "coinbase", "dydx", "fake"},
+    "job_ingest_equities": {"yfinance", "tiingo", "finnhub", "fake"},
+    "job_ingest_equity_intraday": {"coinbase"},
+    "job_ingest_derivatives": {"dydx"},
 }
 
 
@@ -177,6 +177,10 @@ class HealthChecker:
         # If no active providers detected, use all metrics (fallback for setup/testing)
         if active_providers:
             metrics = [m for m in all_metrics if m.provider in active_providers]
+            # Fallback: if filter matched nothing but there are metrics, use all
+            # (prevents silently hiding outages when casing/mapping is wrong)
+            if not metrics and all_metrics:
+                metrics = all_metrics
         else:
             metrics = all_metrics
 
@@ -228,6 +232,10 @@ class HealthChecker:
         # If no active providers detected, use all metrics (fallback for setup/testing)
         if active_providers:
             metrics = [m for m in all_metrics if m.provider in active_providers]
+            # Fallback: if filter matched nothing but there are metrics, use all
+            # (prevents silently hiding outages when casing/mapping is wrong)
+            if not metrics and all_metrics:
+                metrics = all_metrics
         else:
             metrics = all_metrics
 
@@ -439,6 +447,10 @@ class HealthChecker:
         # If no active providers detected, use all metrics (fallback for setup/testing)
         if active_providers:
             metrics = [m for m in all_metrics if m.provider in active_providers]
+            # Fallback: if filter matched nothing but there are metrics, use all
+            # (prevents silently hiding outages when casing/mapping is wrong)
+            if not metrics and all_metrics:
+                metrics = all_metrics
         else:
             metrics = all_metrics
 
