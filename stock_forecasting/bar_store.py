@@ -113,51 +113,76 @@ class BarRepository:
                     )
                 ).all()
             }
-            new_count = sum(1 for b in valid_bars if b.ts not in existing_ts)
-
-            # Single idempotent upsert. INSERT .. ON CONFLICT avoids the
-            # read-then-write race and SQLAlchemy's RETURNING-based batch
-            # insert, which libSQL/Turso rejects on a duplicate and which then
-            # poisons the session for every later ticker. Chunked so one
-            # request stays small over a remote (Turso) connection.
-            stmt = text(
-                "INSERT INTO ohlcv_bars "
-                "(ticker, interval, ts, open, high, low, close, adj_close, "
-                " volume, source, ingested_at) "
-                "VALUES (:ticker, :interval, :ts, :open, :high, :low, :close, "
-                " :adj_close, :volume, :source, :ingested_at) "
-                "ON CONFLICT(ticker, interval, ts) DO UPDATE SET "
-                " open=excluded.open, high=excluded.high, low=excluded.low, "
-                " close=excluded.close, adj_close=excluded.adj_close, "
-                " volume=excluded.volume, source=excluded.source, "
-                " ingested_at=excluded.ingested_at"
-            )
-            conn = self.session.connection()
-            chunk = 200
-            for start in range(0, len(valid_bars), chunk):
-                conn.execute(
-                    stmt,
-                    [
-                        {
-                            "ticker": ticker,
-                            "interval": interval,
-                            "ts": b.ts,
-                            "open": b.open,
-                            "high": b.high,
-                            "low": b.low,
-                            "close": b.close,
-                            "adj_close": b.adj_close,
-                            "volume": b.volume,
-                            "source": source,
-                            "ingested_at": now_str,
-                        }
-                        for b in valid_bars[start : start + chunk]
-                    ],
-                )
-            inserted_count = new_count
+            inserted_count = sum(1 for b in valid_bars if b.ts not in existing_ts)
+            self._bulk_upsert(ticker, interval, source, now_str, valid_bars)
 
         self.session.commit()
         return inserted_count
+
+    def _bulk_upsert(
+        self,
+        ticker: str,
+        interval: str,
+        source: str,
+        now_str: str,
+        bars: list[Bar],
+    ) -> None:
+        """Idempotent bulk write of `bars` as ONE multi-row INSERT per chunk.
+
+        A single ``INSERT ... VALUES (..),(..),.. ON CONFLICT DO UPDATE`` is one
+        round trip for the whole chunk. `executemany` over a remote libSQL/Turso
+        connection instead does one network round trip *per row* (~200ms each),
+        which turned a 500-bar backfill into ~2 minutes. `ON CONFLICT` also
+        sidesteps SQLAlchemy's RETURNING batch-insert path, which libSQL rejects
+        on a duplicate and which then poisons the session for later tickers.
+        """
+        cols = (
+            "ticker",
+            "interval",
+            "ts",
+            "open",
+            "high",
+            "low",
+            "close",
+            "adj_close",
+            "volume",
+            "source",
+            "ingested_at",
+        )
+        update = ", ".join(f"{c}=excluded.{c}" for c in cols[3:])
+        conn = self.session.connection()
+        chunk = 100  # 100 rows * 11 cols = 1100 params, well under libSQL's cap
+        for start in range(0, len(bars), chunk):
+            batch = bars[start : start + chunk]
+            rows_sql = ", ".join(
+                f"(:t{i}, :iv{i}, :ts{i}, :o{i}, :h{i}, :l{i}, :c{i}, :ac{i}, "
+                f":v{i}, :s{i}, :ia{i})"
+                for i in range(len(batch))
+            )
+            params: dict[str, object] = {}
+            for i, b in enumerate(batch):
+                params.update(
+                    {
+                        f"t{i}": ticker,
+                        f"iv{i}": interval,
+                        f"ts{i}": b.ts,
+                        f"o{i}": b.open,
+                        f"h{i}": b.high,
+                        f"l{i}": b.low,
+                        f"c{i}": b.close,
+                        f"ac{i}": b.adj_close,
+                        f"v{i}": b.volume,
+                        f"s{i}": source,
+                        f"ia{i}": now_str,
+                    }
+                )
+            conn.execute(
+                text(
+                    f"INSERT INTO ohlcv_bars ({', '.join(cols)}) VALUES {rows_sql} "
+                    f"ON CONFLICT(ticker, interval, ts) DO UPDATE SET {update}"
+                ),
+                params,
+            )
 
     def get_range(
         self,
