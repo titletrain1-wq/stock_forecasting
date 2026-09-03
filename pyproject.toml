@@ -19,6 +19,7 @@ dependencies = [
     "pandas-market-calendars>=4.1",
     "yfinance>=1.7.0",
     "plotly>=7.0.0",
+    "lightgbm>=4.0",
 ]
 
 [dependency-groups]
