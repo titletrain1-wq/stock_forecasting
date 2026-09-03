@@ -109,9 +109,14 @@ def test_ci_band_traces_read_only_snapshot_fields() -> None:
 
 
 def test_disclaimer_present_in_figure_and_known_limitations() -> None:
+    import unicodedata
     fig = build_price_figure(_BARS, [_snapshot()])
     assert any(a.text == CI_DISCLAIMER for a in fig.layout.annotations)
-    assert CI_DISCLAIMER in _KNOWN_LIMITATIONS.read_text()
+    known_limitations_text = _KNOWN_LIMITATIONS.read_text(encoding='utf-8')
+    # Normalize both to NFC to handle any cross-platform encoding variants
+    disclaimer_nfc = unicodedata.normalize('NFC', CI_DISCLAIMER)
+    text_nfc = unicodedata.normalize('NFC', known_limitations_text)
+    assert disclaimer_nfc in text_nfc
 
 
 def test_disclaimer_surfaced_by_app_caption() -> None:
