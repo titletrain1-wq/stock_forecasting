@@ -148,8 +148,8 @@ class TestCoinbaseBackfill:
         for params in request_params:
             start_iso = params["start"]
             end_iso = params["end"]
-            start_dt = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
-            end_dt = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
+            start_dt = datetime.fromisoformat(start_iso)
+            end_dt = datetime.fromisoformat(end_iso)
             span_minutes = (end_dt - start_dt).total_seconds() / 60
             assert span_minutes <= max_span_minutes, (
                 f"Chunk span {span_minutes} minutes exceeds max {max_span_minutes}"
