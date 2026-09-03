@@ -77,7 +77,7 @@ class BarRepository:
         # Spec requires closed bars only; today's bar is still forming.
         bars_filtered = []
         for b in bars:
-            ts = b.ts if hasattr(b, 'ts') else b.get('ts', '')
+            ts = b.ts if hasattr(b, "ts") else b.get("ts", "")
             if not ts.startswith(today_utc.isoformat()):
                 bars_filtered.append(b)
 

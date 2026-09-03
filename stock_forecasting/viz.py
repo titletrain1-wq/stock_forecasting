@@ -109,39 +109,39 @@ def _compute_indicators(bars: list[_BarLike]) -> dict[str, Any]:
     # Convert bars to DataFrame
     b_sorted = sorted(bars, key=lambda b: str(b.ts))
     data = {
-        'ts': [b.ts for b in b_sorted],
-        'open': [b.open for b in b_sorted],
-        'high': [b.high for b in b_sorted],
-        'low': [b.low for b in b_sorted],
-        'close': [b.close for b in b_sorted],
-        'volume': [getattr(b, 'volume', 0) for b in b_sorted],
+        "ts": [b.ts for b in b_sorted],
+        "open": [b.open for b in b_sorted],
+        "high": [b.high for b in b_sorted],
+        "low": [b.low for b in b_sorted],
+        "close": [b.close for b in b_sorted],
+        "volume": [getattr(b, "volume", 0) for b in b_sorted],
     }
     df = pd.DataFrame(data)
 
-    result = {'df': df, 'ts': df['ts'].tolist()}
+    result = {"df": df, "ts": df["ts"].tolist()}
 
     try:
         # Price pane indicators
-        result['sma20'] = ta.sma(df['close'], length=20).tolist()
-        result['sma50'] = ta.sma(df['close'], length=50).tolist()
-        bbands = ta.bbands(df['close'], length=20, std=2)
+        result["sma20"] = ta.sma(df["close"], length=20).tolist()
+        result["sma50"] = ta.sma(df["close"], length=50).tolist()
+        bbands = ta.bbands(df["close"], length=20, std=2)
         if bbands is not None and len(bbands.columns) >= 3:
-            result['bb_upper'] = bbands.iloc[:, 2].tolist()
-            result['bb_lower'] = bbands.iloc[:, 0].tolist()
+            result["bb_upper"] = bbands.iloc[:, 2].tolist()
+            result["bb_lower"] = bbands.iloc[:, 0].tolist()
 
         # RSI sub-pane
-        result['rsi'] = ta.rsi(df['close'], length=14).tolist()
+        result["rsi"] = ta.rsi(df["close"], length=14).tolist()
 
         # MACD sub-pane (columns: [MACD, MACDh(histogram), MACDs(signal)])
-        macd = ta.macd(df['close'], fast=12, slow=26, signal=9)
+        macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
         if macd is not None and len(macd.columns) >= 3:
-            result['macd_line'] = macd.iloc[:, 0].tolist()
-            result['macd_hist'] = macd.iloc[:, 1].tolist()  # histogram is column 1
-            result['macd_signal'] = macd.iloc[:, 2].tolist()  # signal is column 2
+            result["macd_line"] = macd.iloc[:, 0].tolist()
+            result["macd_hist"] = macd.iloc[:, 1].tolist()  # histogram is column 1
+            result["macd_signal"] = macd.iloc[:, 2].tolist()  # signal is column 2
 
         # Volume sub-pane
-        result['volume'] = df['volume'].tolist()
-        result['volume_sma'] = ta.sma(df['volume'], length=20).tolist()
+        result["volume"] = df["volume"].tolist()
+        result["volume_sma"] = ta.sma(df["volume"], length=20).tolist()
     except Exception:
         # Gracefully handle indicator computation errors (e.g., insufficient data)
         pass
@@ -254,13 +254,13 @@ def build_price_figure(
             )
 
         # Add price-pane indicators (SMA, Bollinger)
-        if indicators and 'ts' in indicators:
-            ts = indicators['ts']
-            if show_sma and 'sma20' in indicators:
+        if indicators and "ts" in indicators:
+            ts = indicators["ts"]
+            if show_sma and "sma20" in indicators:
                 fig.add_trace(
                     go.Scatter(
                         x=ts,
-                        y=indicators['sma20'],
+                        y=indicators["sma20"],
                         name="SMA20",
                         mode="lines",
                         line={"color": "rgba(200, 150, 100, 0.8)", "width": 1},
@@ -269,11 +269,11 @@ def build_price_figure(
                     row=1,
                     col=1,
                 )
-            if show_sma and 'sma50' in indicators:
+            if show_sma and "sma50" in indicators:
                 fig.add_trace(
                     go.Scatter(
                         x=ts,
-                        y=indicators['sma50'],
+                        y=indicators["sma50"],
                         name="SMA50",
                         mode="lines",
                         line={"color": "rgba(150, 100, 200, 0.8)", "width": 1},
@@ -282,14 +282,18 @@ def build_price_figure(
                     row=1,
                     col=1,
                 )
-            if show_bollinger and 'bb_upper' in indicators:
+            if show_bollinger and "bb_upper" in indicators:
                 fig.add_trace(
                     go.Scatter(
                         x=ts,
-                        y=indicators['bb_upper'],
+                        y=indicators["bb_upper"],
                         name="BB Upper",
                         mode="lines",
-                        line={"color": "rgba(100, 100, 200, 0.5)", "width": 1, "dash": "dot"},
+                        line={
+                            "color": "rgba(100, 100, 200, 0.5)",
+                            "width": 1,
+                            "dash": "dot",
+                        },
                         hovertemplate="%{x}<br>BB Upper %{y:.2f}<extra></extra>",
                     ),
                     row=1,
@@ -298,10 +302,14 @@ def build_price_figure(
                 fig.add_trace(
                     go.Scatter(
                         x=ts,
-                        y=indicators['bb_lower'],
+                        y=indicators["bb_lower"],
                         name="BB Lower",
                         mode="lines",
-                        line={"color": "rgba(100, 100, 200, 0.5)", "width": 1, "dash": "dot"},
+                        line={
+                            "color": "rgba(100, 100, 200, 0.5)",
+                            "width": 1,
+                            "dash": "dot",
+                        },
                         fill="tonexty",
                         fillcolor="rgba(100, 100, 200, 0.1)",
                         hovertemplate="%{x}<br>BB Lower %{y:.2f}<extra></extra>",
@@ -416,15 +424,15 @@ def build_price_figure(
         )
 
     # Add sub-pane indicators (RSI, MACD, Volume)
-    if indicators and 'ts' in indicators:
-        ts = indicators['ts']
+    if indicators and "ts" in indicators:
+        ts = indicators["ts"]
         subpane_row = 2  # Start at row 2 (row 1 is price pane)
 
-        if show_rsi and 'rsi' in indicators:
+        if show_rsi and "rsi" in indicators:
             fig.add_trace(
                 go.Scatter(
                     x=ts,
-                    y=indicators['rsi'],
+                    y=indicators["rsi"],
                     name="RSI14",
                     mode="lines",
                     line={"color": "rgba(100, 200, 100, 0.8)", "width": 1},
@@ -444,11 +452,11 @@ def build_price_figure(
                 )
             subpane_row += 1
 
-        if show_macd and 'macd_line' in indicators:
+        if show_macd and "macd_line" in indicators:
             fig.add_trace(
                 go.Scatter(
                     x=ts,
-                    y=indicators['macd_line'],
+                    y=indicators["macd_line"],
                     name="MACD",
                     mode="lines",
                     line={"color": "rgba(200, 100, 100, 0.8)", "width": 1},
@@ -460,7 +468,7 @@ def build_price_figure(
             fig.add_trace(
                 go.Scatter(
                     x=ts,
-                    y=indicators['macd_signal'],
+                    y=indicators["macd_signal"],
                     name="MACD Signal",
                     mode="lines",
                     line={"color": "rgba(150, 100, 150, 0.8)", "width": 1},
@@ -472,9 +480,14 @@ def build_price_figure(
             fig.add_trace(
                 go.Bar(
                     x=ts,
-                    y=indicators['macd_hist'],
+                    y=indicators["macd_hist"],
                     name="MACD Hist",
-                    marker={"color": ["green" if h >= 0 else "red" for h in indicators['macd_hist']]},
+                    marker={
+                        "color": [
+                            "green" if h >= 0 else "red"
+                            for h in indicators["macd_hist"]
+                        ]
+                    },
                     hovertemplate="%{x}<br>Hist %{y:.4f}<extra></extra>",
                     showlegend=False,
                 ),
@@ -483,11 +496,11 @@ def build_price_figure(
             )
             subpane_row += 1
 
-        if show_volume and 'volume' in indicators:
+        if show_volume and "volume" in indicators:
             fig.add_trace(
                 go.Bar(
                     x=ts,
-                    y=indicators['volume'],
+                    y=indicators["volume"],
                     name="Volume",
                     marker={"color": "rgba(100, 100, 200, 0.5)"},
                     hovertemplate="%{x}<br>Vol %{y:.0f}<extra></extra>",
@@ -495,11 +508,11 @@ def build_price_figure(
                 row=subpane_row,
                 col=1,
             )
-            if 'volume_sma' in indicators:
+            if "volume_sma" in indicators:
                 fig.add_trace(
                     go.Scatter(
                         x=ts,
-                        y=indicators['volume_sma'],
+                        y=indicators["volume_sma"],
                         name="Volume SMA20",
                         mode="lines",
                         line={"color": "rgba(100, 100, 200, 0.9)", "width": 1},

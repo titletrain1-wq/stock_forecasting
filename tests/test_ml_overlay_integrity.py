@@ -105,8 +105,15 @@ def test_ci_band_traces_read_only_snapshot_fields() -> None:
     """The CI band y-values equal the snapshot bounds exactly (P_close-anchored)."""
     snap = _snapshot()
     fig = build_price_figure(
-        _BARS, [snap], ribbon_horizon=None, latest_horizons=("5d",),
-        show_sma=False, show_bollinger=False, show_rsi=False, show_macd=False, show_volume=False,
+        _BARS,
+        [snap],
+        ribbon_horizon=None,
+        latest_horizons=("5d",),
+        show_sma=False,
+        show_bollinger=False,
+        show_rsi=False,
+        show_macd=False,
+        show_volume=False,
     )
     lower = next(t for t in fig.data if (t.meta or {}).get("kind") == "ci_lower")
     upper = next(t for t in fig.data if (t.meta or {}).get("kind") == "ci_upper")
@@ -116,13 +123,21 @@ def test_ci_band_traces_read_only_snapshot_fields() -> None:
 
 def test_disclaimer_present_in_figure_and_known_limitations() -> None:
     import unicodedata
-    fig = build_price_figure(_BARS, [_snapshot()],
-        show_sma=False, show_bollinger=False, show_rsi=False, show_macd=False, show_volume=False)
+
+    fig = build_price_figure(
+        _BARS,
+        [_snapshot()],
+        show_sma=False,
+        show_bollinger=False,
+        show_rsi=False,
+        show_macd=False,
+        show_volume=False,
+    )
     assert any(a.text == CI_DISCLAIMER for a in fig.layout.annotations)
-    known_limitations_text = _KNOWN_LIMITATIONS.read_text(encoding='utf-8')
+    known_limitations_text = _KNOWN_LIMITATIONS.read_text(encoding="utf-8")
     # Normalize both to NFC to handle any cross-platform encoding variants
-    disclaimer_nfc = unicodedata.normalize('NFC', CI_DISCLAIMER)
-    text_nfc = unicodedata.normalize('NFC', known_limitations_text)
+    disclaimer_nfc = unicodedata.normalize("NFC", CI_DISCLAIMER)
+    text_nfc = unicodedata.normalize("NFC", known_limitations_text)
     assert disclaimer_nfc in text_nfc
 
 

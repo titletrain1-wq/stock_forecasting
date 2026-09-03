@@ -563,9 +563,7 @@ def test_bar_repository_filters_forming_candles(db_session: Session) -> None:
     assert inserted == 1  # Only yesterday's bar should be inserted
 
     # Verify only yesterday's bar exists
-    rows = db_session.exec(
-        select(OhlcvBar).where(OhlcvBar.ticker == "BTC")
-    ).all()
+    rows = db_session.exec(select(OhlcvBar).where(OhlcvBar.ticker == "BTC")).all()
     assert len(rows) == 1
     assert rows[0].ts == yesterday_ts
     assert rows[0].close == 50500.0

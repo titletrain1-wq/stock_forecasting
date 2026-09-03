@@ -46,7 +46,9 @@ def _parse_utc(ts_str: str) -> datetime:
     return dt.astimezone(UTC)
 
 
-def _get_active_providers(session: Session, now: datetime | None = None, active_threshold_min: int = 60) -> set[str]:
+def _get_active_providers(
+    session: Session, now: datetime | None = None, active_threshold_min: int = 60
+) -> set[str]:
     """Get the set of currently-active providers based on recent job heartbeats.
 
     A provider is considered active if it's used by a job that has pulsed within

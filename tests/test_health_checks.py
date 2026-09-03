@@ -557,8 +557,12 @@ def test_active_provider_filter_detects_crypto_outage(db_session: Session) -> No
     assert latency_result.status == "DEGRADED", "Latency check should detect high RTT"
 
     error_result = checker.check_error_rate()
-    assert error_result.status == "CRITICAL", "Error rate check should detect breaker open + 100% failure"
-    assert "coinbase" in error_result.message.lower(), "Error message should name the failing provider"
+    assert error_result.status == "CRITICAL", (
+        "Error rate check should detect breaker open + 100% failure"
+    )
+    assert "coinbase" in error_result.message.lower(), (
+        "Error message should name the failing provider"
+    )
 
     quota_result = checker.check_quota()
     assert quota_result.status == "CRITICAL", "Quota check should detect 100% usage"
@@ -627,11 +631,17 @@ def test_stale_provider_errors_suppressed(db_session: Session) -> None:
     # Filter removes coingecko, leaving only [yfinance] which is healthy
     # Coingecko's errors are suppressed -> all checks return NOMINAL
     error_result = checker.check_error_rate(now=now)
-    assert error_result.status == "NOMINAL", f"Inactive coingecko errors should be suppressed. Got: {error_result.message}"
+    assert error_result.status == "NOMINAL", (
+        f"Inactive coingecko errors should be suppressed. Got: {error_result.message}"
+    )
     assert "yfinance" in error_result.details
 
     latency_result = checker.check_latency(now=now)
-    assert latency_result.status == "NOMINAL", "Inactive coingecko latency should be suppressed"
+    assert latency_result.status == "NOMINAL", (
+        "Inactive coingecko latency should be suppressed"
+    )
 
     quota_result = checker.check_quota(now=now)
-    assert quota_result.status == "NOMINAL", "Inactive coingecko quota should be suppressed"
+    assert quota_result.status == "NOMINAL", (
+        "Inactive coingecko quota should be suppressed"
+    )
