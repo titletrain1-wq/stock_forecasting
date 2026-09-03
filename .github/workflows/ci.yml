@@ -1,6 +1,9 @@
 name: CI
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
 
 jobs:
   test:
@@ -10,8 +13,8 @@ jobs:
         python-version: ["3.12"]
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v2
-      - run: uv sync
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --all-groups
       - run: uv run ruff format --check .
       - run: uv run ruff check .
       - run: uv run pytest tests/ -v
