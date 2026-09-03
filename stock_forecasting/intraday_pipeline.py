@@ -43,8 +43,8 @@ def fetch_intraday_bars_5m(
         current = datetime.combine(start, time.min, tzinfo=UTC)
         end_dt = datetime.combine(end, time.max, tzinfo=UTC)
 
-        # Chunk by 25 hours: 25h * 12 bars/h = 300 bars (Coinbase's 300-candle limit per S1.1)
-        chunk_delta = timedelta(hours=25)
+        # Chunk by 24h55m: (24*60 + 55) * 1min / 5min = 299 bars (under Coinbase's 300-candle limit per S1.1)
+        chunk_delta = timedelta(hours=24, minutes=55)
         while current < end_dt:
             chunk_end = min(end_dt, current + chunk_delta)
 

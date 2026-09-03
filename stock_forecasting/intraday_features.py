@@ -140,6 +140,9 @@ class IntradayFeatureBuilder:
     ) -> pd.DataFrame:
         """Add funding-rate z-score feature (14-day rolling window on DAILY funding, per god ruling).
 
+        Uses pd.merge_asof(direction='backward') to ensure no lookahead:
+        each bar gets the last funding rate published at or before its timestamp.
+
         Note: crypto_derivatives.ts is day-aligned (00:00:00Z); hourly ingestion = future T-016.
         Computes z-score of DAILY funding rates over 14-day window.
 
@@ -156,35 +159,43 @@ class IntradayFeatureBuilder:
         bars_df["ts"] = pd.to_datetime(bars_df["ts"], utc=True)
         funding_df["ts"] = pd.to_datetime(funding_df["ts"], utc=True)
 
-        # Extract date from bars (for merging with daily funding)
-        bars_df["date"] = bars_df["ts"].dt.date
-        funding_df["date"] = pd.to_datetime(funding_df["ts"]).dt.date
-
-        # Merge bars to daily funding rates by date (left merge keeps all bars)
-        merged = bars_df.merge(
-            funding_df, on="date", how="left", suffixes=("", "_funding")
+        # As-of join: each bar gets the last funding rate published at or before its timestamp
+        merged = pd.merge_asof(
+            bars_df.sort_values("ts"),
+            funding_df.sort_values("ts"),
+            on="ts",
+            direction="backward",
+            suffixes=("", "_funding"),
         )
+
+        # Extract date from funding_rate ts (which is now in bars via merge_asof)
+        merged["date"] = merged["ts"].dt.date
+        merged_funding = merged.dropna(subset=["funding_rate"]).copy()
 
         # Compute z-score over 14-day rolling window of DAILY funding rates
-        # (groupby date to get one value per day, then compute rolling stats)
-        daily_funding = merged.groupby("date")["funding_rate"].first().reset_index()
-        daily_funding["funding_mean_14d"] = (
-            daily_funding["funding_rate"].rolling(14, min_periods=1).mean()
-        )
-        daily_funding["funding_std_14d"] = (
-            daily_funding["funding_rate"].rolling(14, min_periods=1).std()
-        )
-        daily_funding["funding_zscore"] = (
-            daily_funding["funding_rate"] - daily_funding["funding_mean_14d"]
-        ) / (daily_funding["funding_std_14d"] + 1e-9)
+        # Group by date to get unique daily rates, then compute rolling stats
+        if len(merged_funding) > 0:
+            daily_funding = (
+                merged_funding.groupby("date")["funding_rate"].first().reset_index()
+            )
+            daily_funding["funding_mean_14d"] = (
+                daily_funding["funding_rate"].rolling(14, min_periods=1).mean()
+            )
+            daily_funding["funding_std_14d"] = (
+                daily_funding["funding_rate"].rolling(14, min_periods=1).std()
+            )
+            daily_funding["funding_zscore"] = (
+                daily_funding["funding_rate"] - daily_funding["funding_mean_14d"]
+            ) / (daily_funding["funding_std_14d"] + 1e-9)
 
-        # Merge z-scores back to bars (one value per date)
-        merged_z = merged.merge(
-            daily_funding[["date", "funding_zscore"]], on="date", how="left"
-        )
+            # Merge z-scores back to merged df
+            merged_z = merged.merge(
+                daily_funding[["date", "funding_zscore"]], on="date", how="left"
+            )
+            bars_df["funding_zscore"] = merged_z["funding_zscore"]
+        else:
+            bars_df["funding_zscore"] = np.nan
 
-        # Return bars with funding_zscore
-        bars_df["funding_zscore"] = merged_z["funding_zscore"]
         return bars_df
 
     def fit_scaler(self, train_features: pd.DataFrame) -> None:
@@ -195,9 +206,13 @@ class IntradayFeatureBuilder:
         """
         feature_cols = [c for c in train_features.columns if c != "ts"]
         self.scaler = StandardScaler()
-        # Drop NaN rows before fitting to avoid biasing the mean towards 0
-        train_clean = train_features[feature_cols].dropna()
-        self.scaler.fit(train_clean)
+        # Drop entirely-NaN columns first (e.g., funding_zscore during sparse data)
+        # Then drop any remaining rows with NaN to avoid biasing the mean towards 0
+        train_cols = train_features[feature_cols]
+        train_cols_no_all_nan = train_cols.dropna(axis=1, how="all")
+        train_clean = train_cols_no_all_nan.dropna()
+        if len(train_clean) > 0:
+            self.scaler.fit(train_clean)
 
     def transform(self, features_df: pd.DataFrame) -> pd.DataFrame:
         """Apply fitted scaler to features.

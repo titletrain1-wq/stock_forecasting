@@ -116,6 +116,45 @@ class TestCoinbaseBackfill:
 
         assert len(bars) == 2  # Only valid bars
 
+    def testfetch_intraday_bars_5m_chunk_span_under_limit(self) -> None:
+        """Test that each chunk request spans at most 299 5-minute intervals (< 300-candle limit)."""
+        mock_provider = MagicMock()
+        mock_provider.resolve_product_id.return_value = "BTC-USD"
+        mock_provider.base_url = "https://api.coinbase.com/api/v3"
+        mock_client = MagicMock()
+        mock_provider._get_client.return_value = mock_client
+        mock_provider._client = None
+
+        # Track all params passed to client.get()
+        request_params = []
+
+        def mock_get(url, params=None):
+            request_params.append(params)
+            response = MagicMock()
+            response.json.return_value = []
+            return response
+
+        mock_client.get.side_effect = mock_get
+
+        # Fetch a 365-day range (will be split into multiple chunks)
+        start_date = date(2025, 9, 3)
+        end_date = date(2026, 9, 2)
+
+        fetch_intraday_bars_5m(mock_provider, "BTC-USD", start_date, end_date)
+
+        # Verify each request's time span is <= 299 5-min intervals (24h55m)
+        # 299 5-min marks = 1495 minutes = 24h55m
+        max_span_minutes = 24 * 60 + 55  # 1495 minutes
+        for params in request_params:
+            start_iso = params["start"]
+            end_iso = params["end"]
+            start_dt = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
+            end_dt = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
+            span_minutes = (end_dt - start_dt).total_seconds() / 60
+            assert span_minutes <= max_span_minutes, (
+                f"Chunk span {span_minutes} minutes exceeds max {max_span_minutes}"
+            )
+
 
 class TestFundingAsOfJoin:
     """Test 2: Funding-rate as-of join with no lookahead."""
@@ -213,7 +252,9 @@ class TestAnchorFiltering:
         result = filter_closed_bar_anchors(df)
 
         # 1h anchors: all :00 timestamps = 24 per day (one per hour)
-        assert len(result) == 24, f"Expected 24 anchors (all :00 per day), got {len(result)}"
+        assert len(result) == 24, (
+            f"Expected 24 anchors (all :00 per day), got {len(result)}"
+        )
 
         # Verify NO non-:00-minute timestamps survive
         assert all(result["ts"].dt.minute == 0), "Non-zero minutes found"
@@ -223,7 +264,9 @@ class TestAnchorFiltering:
         result["hour"] = result["ts"].dt.hour
         is_4h = result["hour"] % 4 == 0
         count_4h = is_4h.sum()
-        assert count_4h == 6, f"Expected 6 4h anchors (00/04/08/12/16/20:00), got {count_4h}"
+        assert count_4h == 6, (
+            f"Expected 6 4h anchors (00/04/08/12/16/20:00), got {count_4h}"
+        )
 
     def testfilter_closed_bar_anchors_empty(self) -> None:
         """Test that empty DataFrame returns empty result."""
@@ -287,16 +330,17 @@ class TestEndToEnd:
                 return result
 
             # Patch the fetch function
-            with patch(
-                "stock_forecasting.intraday_trainer.fetch_intraday_bars_5m",
-                side_effect=mock_fetch_fn,
-            ), patch(
-                "stock_forecasting.intraday_trainer.fetch_funding_rates_from_db"
-            ) as MockFunding:
+            with (
+                patch(
+                    "stock_forecasting.intraday_trainer.fetch_intraday_bars_5m",
+                    side_effect=mock_fetch_fn,
+                ),
+                patch(
+                    "stock_forecasting.intraday_trainer.fetch_funding_rates_from_db"
+                ) as MockFunding,
+            ):
                 # Return empty funding (for simplicity)
-                MockFunding.return_value = pd.DataFrame(
-                    columns=["ts", "funding_rate"]
-                )
+                MockFunding.return_value = pd.DataFrame(columns=["ts", "funding_rate"])
 
                 # Run backfill
                 backfill_intraday_bars(
@@ -353,9 +397,7 @@ class TestEndToEnd:
         initial_id = bar1.id
 
         # Mock backfill to try inserting the same bar
-        with patch(
-            "stock_forecasting.intraday_trainer.CoinbaseProvider"
-        ):
+        with patch("stock_forecasting.intraday_trainer.CoinbaseProvider"):
 
             def mock_fetch_fn(provider, ticker, start, end, **kwargs):
                 return [
@@ -370,15 +412,16 @@ class TestEndToEnd:
                     }
                 ]
 
-            with patch(
-                "stock_forecasting.intraday_trainer.fetch_intraday_bars_5m",
-                side_effect=mock_fetch_fn,
-            ), patch(
-                "stock_forecasting.intraday_trainer.fetch_funding_rates_from_db"
-            ) as MockFunding:
-                MockFunding.return_value = pd.DataFrame(
-                    columns=["ts", "funding_rate"]
-                )
+            with (
+                patch(
+                    "stock_forecasting.intraday_trainer.fetch_intraday_bars_5m",
+                    side_effect=mock_fetch_fn,
+                ),
+                patch(
+                    "stock_forecasting.intraday_trainer.fetch_funding_rates_from_db"
+                ) as MockFunding,
+            ):
+                MockFunding.return_value = pd.DataFrame(columns=["ts", "funding_rate"])
 
                 backfill_intraday_bars(
                     session=db_session, tickers=["ETH-USD"], test_mode=True

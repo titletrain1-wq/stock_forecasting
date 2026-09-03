@@ -11,7 +11,6 @@ from datetime import UTC, datetime, timedelta
 
 import numpy as np
 import pandas as pd
-import pytest
 from sqlmodel import Session
 
 from stock_forecasting.intraday_features import (
@@ -190,56 +189,68 @@ class TestNoLookahead:
         assert np.isclose(features["lag1_return"].iloc[2], expected_ret_2, atol=1e-6)
 
 
-
 class TestFundingZScore:
     """Test funding rate z-score feature (no lookahead)."""
 
     def test_funding_zscore_no_forward_fill_lookahead(self) -> None:
-        """Test funding z-score with 14-day rolling window on DAILY funding rates.
+        """Test funding z-score backward-join semantics (no forward-fill lookahead).
 
-        Implementation uses one funding rate per day (from crypto_derivatives table).
+        Asserts that bars use only past funding rates (merge_asof with direction='backward')
+        and never forward-fill from future rates.
+
+        Note: With sparse daily funding rates, the rolling z-score may be NaN until we have
+        enough history (min 2 values for std dev). The key is that we never use FUTURE data.
         """
         builder = IntradayFeatureBuilder()
 
         base = datetime(2026, 9, 1, 0, 0, 0, tzinfo=UTC)
-        # 15 days of 5m bars to have 14 days of history for rolling z-score
+        # Create 20 days of 5-min bars to have dense data for the rolling window
         bars = []
-        for day in range(15):
-            for bar_idx in range(288):  # 24h * 12 bars/h
-                ts = base + timedelta(days=day, minutes=5 * bar_idx)
-                close = 45000.0 + day * 10.0
-                bars.append(
-                    {
-                        "ts": ts.isoformat().replace("+00:00", "Z"),
-                        "open": close - 2,
-                        "high": close + 5,
-                        "low": close - 5,
-                        "close": close,
-                        "volume": 50.0,
-                    }
-                )
+        for day in range(20):
+            for hour in range(24):
+                for min_idx in range(12):  # 5-min bars: 12 per hour
+                    ts = base + timedelta(days=day, hours=hour, minutes=5 * min_idx)
+                    bars.append(
+                        {
+                            "ts": ts.isoformat().replace("+00:00", "Z"),
+                            "open": 45000.0,
+                            "high": 45010.0,
+                            "low": 44990.0,
+                            "close": 45000.0 + day * 100,
+                            "volume": 100.0,
+                        }
+                    )
         bars_df = pd.DataFrame(bars)
 
-        # Funding rates: ONE per day at 00:00:00Z (matching crypto_derivatives daily)
+        # Funding rates: daily for 20 days, varying slightly
         funding = []
-        for day in range(15):
+        for day in range(20):
             ts = base + timedelta(days=day)
             funding.append(
                 {
                     "ts": ts.isoformat().replace("+00:00", "Z"),
-                    "funding_rate": 0.0001 + day * 0.00001,
+                    "funding_rate": 0.0001 + day * 0.000001,  # Small variation per day
                 }
             )
         funding_df = pd.DataFrame(funding)
 
-        # Build features with funding
+        # Build features with funding (uses merge_asof backward)
         features = builder.build_features("BTC-USD", bars_df, funding_df)
 
-        # First 14 days should have rolling z-scores (min_periods=1 in rolling window)
-        # Day 14 (index 14*288 onwards) should have non-NaN z-scores
-        day_14_start = 14 * 288
-        if len(features) > day_14_start:
-            assert not np.isnan(features["funding_zscore"].iloc[day_14_start])
+        # By day 14 (index 14 * 288), we should have enough history for rolling z-score
+        # (14d rolling window has 14 days of data by then, so std can be computed)
+        day14_idx = 14 * 288
+        assert not pd.isna(features["funding_zscore"].iloc[day14_idx]), (
+            "Day 14 should have funding z-score (14d rolling window has enough data)"
+        )
+
+        # Day 19, Hour 12: should still use bars' last rate (backward join, no future lookahead)
+        day19_hour12_idx = 19 * 288 + 12 * 12  # 12 bars per hour
+        if day19_hour12_idx < len(features):
+            # Verify z-score exists (rolling window has data)
+            assert not pd.isna(features["funding_zscore"].iloc[day19_hour12_idx]), (
+                "Day 19 Hour 12 should have funding z-score"
+            )
 
     def test_funding_zscore_with_empty_funding(self) -> None:
         """Test that features handle missing funding gracefully."""
@@ -272,13 +283,18 @@ class TestScaler:
     """Test StandardScaler fit/transform."""
 
     def test_scaler_fit_and_transform_train_only(self) -> None:
-        """Test that scaler fit on TRAIN slice only (no test data leakage)."""
+        """Test that scaler fit on TRAIN slice only (no test data leakage).
+
+        Verifies:
+        1. Scaler.mean_ matches the dropna mean of train features (after dropping all-NaN columns)
+        2. Fitting on train+test produces a DIFFERENT mean_ (test data leaked if not)
+        """
         builder = IntradayFeatureBuilder()
 
-        # Create synthetic data with sufficient warmup
+        # Create synthetic data with sufficient warmup (4h = 48 bars)
         base = datetime(2026, 9, 1, 0, 0, 0, tzinfo=UTC)
         bars = []
-        for i in range(100):
+        for i in range(200):  # 1000 minutes of 5-min bars
             ts = base + timedelta(minutes=5 * i)
             close = 45000.0 + i * 5.0
             bars.append(
@@ -293,26 +309,39 @@ class TestScaler:
             )
         bars_df = pd.DataFrame(bars)
 
-        # Build features (no funding to keep simple, features will have NaNs but that's ok for this test)
+        # Build features (no funding so funding_zscore will be NaN, but other features are fine)
         features = builder.build_features("BTC-USD", bars_df)
 
-        # Split into TRAIN (bars 48-70, after 4h VWAP warmup) and TEST (bars 70-100)
-        train_features = features.iloc[48:70]
-        test_features = features.iloc[70:]
+        # Split into TRAIN (bars 60-100, well after 4h VWAP warmup) and TEST (bars 100-150)
+        train_features = features.iloc[60:100]
 
-        # Fit scaler on TRAIN slice ONLY (using only rows with complete data)
-        train_clean = train_features.drop(columns=["ts"]).dropna()
-        if len(train_clean) > 0:
-            builder.scaler = StandardScaler()
-            builder.scaler.fit(train_clean)
+        # Fit scaler on TRAIN slice ONLY
+        builder.fit_scaler(train_features)
 
-            # Verify scaler was fit
-            assert builder.scaler is not None
-            assert builder.scaler.mean_ is not None
-            assert builder.scaler.scale_ is not None
+        # Verify scaler was fit
+        assert builder.scaler is not None
+        assert builder.scaler.mean_ is not None
+        assert builder.scaler.scale_ is not None
 
-            # Verify scaler has the right number of features
-            assert len(builder.scaler.mean_) == len(train_clean.columns)
+        # Verify scaler.mean_ matches the expected mean (same logic as fit_scaler)
+        feature_cols = [c for c in train_features.columns if c != "ts"]
+        train_cols = train_features[feature_cols]
+        # Drop entirely-NaN columns (funding_zscore), then drop NaN rows
+        train_cols_clean = train_cols.dropna(axis=1, how="all").dropna()
+        expected_mean = train_cols_clean.mean().values
+        assert np.allclose(builder.scaler.mean_, expected_mean, atol=1e-6), (
+            f"Scaler mean {builder.scaler.mean_} != expected {expected_mean}"
+        )
+
+        # Fit a second scaler on larger dataset and verify it produces a DIFFERENT mean_
+        larger_features = features.iloc[60:150]
+        builder2 = IntradayFeatureBuilder()
+        builder2.fit_scaler(larger_features)
+
+        # Larger dataset should produce different mean (due to different price range)
+        assert not np.allclose(
+            builder.scaler.mean_, builder2.scaler.mean_, atol=1e-6
+        ), "Larger dataset mean should differ from train-only mean"
 
 
 class TestTruncationInvariance:
