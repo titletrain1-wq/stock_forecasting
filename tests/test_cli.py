@@ -28,8 +28,8 @@ def test_run_once_executes_all_jobs() -> None:
             mock_exit.assert_called_once_with(0)
 
 
-def test_run_once_exits_on_error() -> None:
-    """Verify run_once() exits with code 1 on exception."""
+def test_run_once_tolerates_single_job_failure() -> None:
+    """One job raising must NOT abort the pass or the exit code (serverless)."""
     with patch("stock_forecasting.worker.WorkerScheduler") as mock_scheduler_class:
         mock_scheduler = MagicMock()
         mock_scheduler.job_ingest_crypto.side_effect = RuntimeError("Test error")
@@ -40,7 +40,35 @@ def test_run_once_exits_on_error() -> None:
 
             run_once()
 
-            # Verify exit with error code
+            # Other jobs still ran; heartbeat still fired; exit 0 (not a full outage)
+            mock_scheduler.job_ingest_equities.assert_called_once()
+            mock_scheduler.job_heartbeat.assert_called_once()
+            mock_exit.assert_called_once_with(0)
+
+
+def test_run_once_exits_1_when_every_job_fails() -> None:
+    """A total outage (all jobs raise) exits 1 so the Action goes red."""
+    with patch("stock_forecasting.worker.WorkerScheduler") as mock_scheduler_class:
+        mock_scheduler = MagicMock()
+        for name in (
+            "job_ingest_crypto",
+            "job_ingest_equities",
+            "job_ingest_equity_intraday",
+            "job_ingest_derivatives",
+            "job_retrain_nightly",
+            "job_evaluate_hourly",
+            "job_prune_intraday",
+            "job_check_ws_idle",
+            "job_heartbeat",
+        ):
+            getattr(mock_scheduler, name).side_effect = RuntimeError("boom")
+        mock_scheduler_class.return_value = mock_scheduler
+
+        with patch("stock_forecasting.cli.sys.exit") as mock_exit:
+            from stock_forecasting.cli import run_once
+
+            run_once()
+
             mock_exit.assert_called_once_with(1)
 
 

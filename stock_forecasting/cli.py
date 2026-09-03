@@ -39,41 +39,38 @@ def run_once() -> None:
 
     try:
         scheduler = WorkerScheduler()
-
-        # Run each job synchronously (no BackgroundScheduler)
-        logger.info("Running job_ingest_crypto...")
-        scheduler.job_ingest_crypto()
-
-        logger.info("Running job_ingest_equities...")
-        scheduler.job_ingest_equities()
-
-        logger.info("Running job_ingest_equity_intraday...")
-        scheduler.job_ingest_equity_intraday()
-
-        logger.info("Running job_ingest_derivatives...")
-        scheduler.job_ingest_derivatives()
-
-        logger.info("Running job_retrain_nightly...")
-        scheduler.job_retrain_nightly()
-
-        logger.info("Running job_evaluate_hourly...")
-        scheduler.job_evaluate_hourly()
-
-        logger.info("Running job_prune_intraday...")
-        scheduler.job_prune_intraday()
-
-        logger.info("Running job_check_ws_idle...")
-        scheduler.job_check_ws_idle()
-
-        logger.info("Running job_heartbeat...")
-        scheduler.job_heartbeat()
-
-        logger.info("All jobs completed successfully.")
-        sys.exit(0)
-
     except Exception:
-        logger.exception("Fatal error during job execution")
+        logger.exception("Could not construct WorkerScheduler - aborting")
         sys.exit(1)
+
+    # Run each job independently: a single provider/data failure must not
+    # abort the whole pass or block the heartbeat. Serverless-friendly.
+    jobs = [
+        ("job_ingest_crypto", scheduler.job_ingest_crypto),
+        ("job_ingest_equities", scheduler.job_ingest_equities),
+        ("job_ingest_equity_intraday", scheduler.job_ingest_equity_intraday),
+        ("job_ingest_derivatives", scheduler.job_ingest_derivatives),
+        ("job_retrain_nightly", scheduler.job_retrain_nightly),
+        ("job_evaluate_hourly", scheduler.job_evaluate_hourly),
+        ("job_prune_intraday", scheduler.job_prune_intraday),
+        ("job_check_ws_idle", scheduler.job_check_ws_idle),
+        ("job_heartbeat", scheduler.job_heartbeat),
+    ]
+    failures: list[str] = []
+    for name, fn in jobs:
+        logger.info("Running %s...", name)
+        try:
+            fn()
+        except Exception:
+            logger.exception("%s failed", name)
+            failures.append(name)
+
+    if failures:
+        logger.warning("Completed with %d job failure(s): %s", len(failures), failures)
+    else:
+        logger.info("All jobs completed successfully.")
+    # Exit non-zero only if every job failed (total outage worth alerting on).
+    sys.exit(1 if len(failures) == len(jobs) else 0)
 
 
 def run_scheduler() -> None:
