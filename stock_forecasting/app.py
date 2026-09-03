@@ -339,17 +339,40 @@ def render_health_panel(engine) -> None:
     )
 
 
+def _bootstrap(engine) -> None:
+    """Best-effort schema + watchlist bootstrap.
+
+    In production the worker / backfill job owns the schema; the app only
+    reads. A DDL hiccup on the hosted DB (e.g. Turso quirks around
+    ``CREATE TABLE``) must not take the whole UI down when the tables already
+    exist, so this is non-fatal.
+    """
+    for step in (create_tables, seed_watchlist):
+        try:
+            step(engine)
+        except Exception as exc:  # noqa: BLE001 - startup must not hard-fail
+            st.session_state.setdefault("_bootstrap_warnings", []).append(
+                f"{step.__name__}: {exc}"
+            )
+
+
 def main() -> None:
     """Render the single-screen forecast view."""
     st.set_page_config(layout="wide", page_title="Stock Forecasting")
     engine = get_engine()
-    create_tables(engine)  # self-bootstrap schema on a fresh deploy
-    seed_watchlist(engine)  # ensure the configured watchlist exists
+    _bootstrap(engine)
 
-    tickers = load_tickers(engine)
+    try:
+        tickers = load_tickers(engine)
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Database read failed: {exc}")
+        st.stop()
+        return
     render_sidebar(engine, tickers)
 
     st.title("Stock Forecast View")
+    for warn in st.session_state.get("_bootstrap_warnings", []):
+        st.caption(f"⚠️ startup: {warn}")
     if not tickers:
         st.info("Add a ticker in the sidebar to get started.")
         return
