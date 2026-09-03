@@ -47,8 +47,36 @@ def create_tables(engine: Engine) -> None:
 
 
 def get_engine(db_path: str | None = None) -> Engine:
-    """Create SQLite engine ensuring parent directories exist."""
+    """Create SQLite or libSQL engine.
+
+    If TURSO_DATABASE_URL is set in environment, use libSQL/Turso (remote).
+    Otherwise, use local SQLite from db_path.
+    """
     settings = get_settings()
+
+    # Check if Turso is configured (both URL and preferably auth token)
+    if settings.turso_database_url and settings.turso_database_url.strip():
+        # Use libSQL/Turso engine (requires sqlalchemy-libsql package)
+        # URL format: sqlite+libsql://[host]?authToken=[token]&secure=true
+        url = settings.turso_database_url
+        if settings.turso_auth_token:
+            # Append auth token if provided
+            separator = "&" if "?" in url else "?"
+            url = f"{url}{separator}authToken={settings.turso_auth_token}"
+        try:
+            return create_sqlmodel_engine(
+                url,
+                echo=False,
+                connect_args={"timeout": 5},
+            )
+        except ImportError as e:
+            if "libsql" in str(e).lower():
+                raise RuntimeError(
+                    "sqlalchemy-libsql not installed. Install it with: pip install sqlalchemy-libsql"
+                ) from e
+            raise
+
+    # Fall back to local SQLite
     path_str = db_path if db_path is not None else settings.db_path
 
     if path_str.startswith("sqlite://"):

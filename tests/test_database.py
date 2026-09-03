@@ -66,8 +66,12 @@ def test_intraday_bar_unique_on_ticker_interval_ts(temp_db: sqlalchemy.Engine) -
             session.commit()
 
 
-def test_get_engine_creates_directory(tmp_path) -> None:
+def test_get_engine_creates_directory(tmp_path, monkeypatch) -> None:
     """Verify get_engine creates parent directory when given a file path."""
+    # For testing, clear Turso env vars to ensure local SQLite is used
+    monkeypatch.setenv("TURSO_DATABASE_URL", "")
+    monkeypatch.setenv("TURSO_AUTH_TOKEN", "")
+
     nested_db = tmp_path / "nested" / "dir" / "test.db"
     engine = get_engine(str(nested_db))
     create_tables(engine)

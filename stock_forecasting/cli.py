@@ -65,6 +65,9 @@ def run_once() -> None:
         logger.info("Running job_check_ws_idle...")
         scheduler.job_check_ws_idle()
 
+        logger.info("Running job_heartbeat...")
+        scheduler.job_heartbeat()
+
         logger.info("All jobs completed successfully.")
         sys.exit(0)
 
