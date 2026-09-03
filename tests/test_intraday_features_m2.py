@@ -243,8 +243,8 @@ class TestFundingZScore:
         # 15 days of 5m bars to have 14 days of history for rolling z-score
         bars = []
         for day in range(15):
-            for 5min_in_day in range(288):  # 24h * 12 bars/h
-                ts = base + timedelta(days=day, minutes=5 * 5min_in_day)
+            for bar_idx in range(288):  # 24h * 12 bars/h
+                ts = base + timedelta(days=day, minutes=5 * bar_idx)
                 close = 45000.0 + day * 10.0
                 bars.append(
                     {
