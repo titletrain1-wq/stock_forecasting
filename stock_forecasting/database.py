@@ -49,13 +49,18 @@ def _make_turso_engine(raw_url: str, auth_token: str) -> Engine:
     """
     import libsql
 
+    # Strip ALL whitespace (not just ends): a secret pasted with a wrapped
+    # line leaves an internal newline in the token, which libsql then puts in
+    # an HTTP header -> "InvalidHeaderValue".
+    token = "".join(auth_token.split())
+    clean_url = "".join(raw_url.split())
     # libsql.connect() wants the full "libsql://<host>" URL as `database`;
     # a bare hostname is treated as a LOCAL file path and never reaches Turso.
-    stripped = raw_url.split("?", 1)[0].rstrip("/")
+    stripped = clean_url.split("?", 1)[0].rstrip("/")
     conn_url = stripped if "://" in stripped else f"libsql://{stripped}"
 
     def _creator() -> object:
-        return _LibsqlConnProxy(libsql.connect(conn_url, auth_token=auth_token))
+        return _LibsqlConnProxy(libsql.connect(conn_url, auth_token=token))
 
     return create_engine(
         "sqlite://",
