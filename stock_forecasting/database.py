@@ -70,7 +70,10 @@ def get_engine(db_path: str | None = None) -> Engine:
             params.append(f"authToken={settings.turso_auth_token}")
         if not any(p.startswith("secure=") for p in params):
             params.append("secure=true")
-        url = f"sqlite+libsql://{base}?{'&'.join(params)}"
+        # NB the "/?" - sqlalchemy-libsql requires the path slash before the
+        # query string or `secure=true` is dropped and the client falls back
+        # to plain HTTP (Turso then 308-redirects and the driver errors).
+        url = f"sqlite+libsql://{base}/?{'&'.join(params)}"
         try:
             # NB: no connect_args={"timeout": ...} here - the libSQL dbapi's
             # connect() does not accept a 'timeout' kwarg (that is sqlite3-only).
