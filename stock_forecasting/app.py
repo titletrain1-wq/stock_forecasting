@@ -25,6 +25,7 @@ from stock_forecasting.panels import (
 )
 from stock_forecasting.schema import (
     AccuracyRecord,
+    IntradayAccuracyRecord,
     IntradayBarsHistory,
     IntradayPredictionSnapshot,
     OhlcvBar,
@@ -296,8 +297,34 @@ def load_intraday_forecasts(engine, symbol: str) -> list:
     return list(latest.values())
 
 
+def load_intraday_accuracy(engine, symbol: str) -> dict:
+    """Per-horizon rollup of graded intraday forecasts: n / dir% / MAE% / CI-cover%."""
+    with Session(engine) as session:
+        recs = list(
+            session.exec(
+                select(IntradayAccuracyRecord).where(
+                    IntradayAccuracyRecord.ticker == symbol,
+                    IntradayAccuracyRecord.realized_return.isnot(None),
+                )
+            ).all()
+        )
+    out: dict[str, dict] = {}
+    for horizon in ("15m", "1h", "4h"):
+        h = [r for r in recs if r.horizon == horizon]
+        if not h:
+            continue
+        n = len(h)
+        out[horizon] = {
+            "n": n,
+            "dir_pct": 100 * sum(r.direction_hit or 0 for r in h) / n,
+            "mae_pct": sum(r.abs_error_pct or 0.0 for r in h) / n,
+            "ci_pct": 100 * sum(r.ci_cover or 0 for r in h) / n,
+        }
+    return out
+
+
 def render_intraday_forecast_panel(engine, symbol: str, ticker: Ticker) -> None:
-    """Short-horizon (15m/1h/4h) crypto forecast chart + readout. Design §7."""
+    """Short-horizon (15m/1h/4h) crypto forecast chart + scorecard. Design §7."""
     if symbol not in INTRADAY_CRYPTO:
         return
     forecasts = load_intraday_forecasts(engine, symbol)
@@ -322,6 +349,21 @@ def render_intraday_forecast_panel(engine, symbol: str, ticker: Ticker) -> None:
         col.caption(f"CI {fc.ci_lower_price:,.0f} – {fc.ci_upper_price:,.0f}")
     fig = build_intraday_forecast_figure(bars, forecasts, title=f"{symbol} · intraday")
     st.plotly_chart(fig, use_container_width=True, key="intraday_forecast_chart")
+
+    scorecard = load_intraday_accuracy(engine, symbol)
+    if scorecard:
+        st.markdown("**Intraday accuracy** (graded forecasts)")
+        st.table(
+            {
+                "horizon": list(scorecard),
+                "n": [s["n"] for s in scorecard.values()],
+                "direction %": [f"{s['dir_pct']:.0f}" for s in scorecard.values()],
+                "MAE %": [f"{s['mae_pct']:.2f}" for s in scorecard.values()],
+                "CI cover %": [f"{s['ci_pct']:.0f}" for s in scorecard.values()],
+            }
+        )
+    else:
+        st.caption("Scorecard warming up — grades appear as forecast targets mature.")
     st.caption(
         "Forecast anchored to the last closed 5-minute bar; graded when the "
         "target bar closes. Separate from the daily model above."

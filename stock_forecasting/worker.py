@@ -463,7 +463,7 @@ class WorkerScheduler:
                 )
 
     def job_intraday_forecast(self) -> None:
-        """Write intraday forecast snapshots for the latest closed bar (crypto 1h/4h)."""
+        """Write intraday forecast snapshots for the latest closed bar (crypto 15m/1h/4h)."""
         logger.info("Executing job_intraday_forecast...")
         with Session(self.engine) as session:
             try:
@@ -479,6 +479,27 @@ class WorkerScheduler:
                 _update_heartbeat(
                     session,
                     "job_intraday_forecast",
+                    success=False,
+                    error_msg=str(exc),
+                )
+
+    def job_intraday_evaluate(self) -> None:
+        """Grade matured intraday forecasts against realized closed bars."""
+        logger.info("Executing job_intraday_evaluate...")
+        with Session(self.engine) as session:
+            try:
+                from stock_forecasting.intraday_evaluator import (
+                    grade_intraday_forecasts,
+                )
+
+                summary = grade_intraday_forecasts(session)
+                _update_heartbeat(session, "job_intraday_evaluate", success=True)
+                logger.info("job_intraday_evaluate: %s", summary)
+            except Exception as exc:
+                logger.exception("Error during job_intraday_evaluate")
+                _update_heartbeat(
+                    session,
+                    "job_intraday_evaluate",
                     success=False,
                     error_msg=str(exc),
                 )
@@ -667,6 +688,13 @@ class WorkerScheduler:
             "interval",
             hours=1,
             id="job_intraday_forecast",
+            replace_existing=True,
+        )
+        self.scheduler.add_job(
+            self.job_intraday_evaluate,
+            "interval",
+            hours=1,
+            id="job_intraday_evaluate",
             replace_existing=True,
         )
         self.scheduler.add_job(
