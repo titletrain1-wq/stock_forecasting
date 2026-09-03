@@ -1,0 +1,6 @@
+# Disable the module file-watcher. On a save it re-imports the package into the
+# running process, and SQLModel's shared MetaData still holds the previous table
+# registrations -> "Table 'tickers' is already defined". Streamlit Cloud does not
+# hot-reload the package anyway, so this only removes a local dev-mode crash.
+[server]
+fileWatcherType = "none"

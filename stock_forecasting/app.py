@@ -225,6 +225,7 @@ def render_chart_panel(engine, symbol: str, ticker: Ticker) -> None:
             show_actual_candles=use_candles,
             latest_horizons=tuple(latest_horizons),
             title=f"{symbol} · actual vs forecast",
+            uirevision=f"{symbol}:{range_label}",
             show_sma=show_sma,
             show_bollinger=show_bollinger,
             show_rsi=show_rsi,

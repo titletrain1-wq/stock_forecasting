@@ -188,6 +188,7 @@ def build_price_figure(
     show_rsi: bool = True,
     show_macd: bool = True,
     show_volume: bool = True,
+    uirevision: str | bool = True,
 ) -> go.Figure:
     """Assemble the actual + forecast-overlay Plotly figure with optional technical indicators.
 
@@ -205,6 +206,10 @@ def build_price_figure(
         show_rsi: show RSI14 as sub-pane.
         show_macd: show MACD as sub-pane.
         show_volume: show Volume + Volume SMA as sub-pane.
+        uirevision: Plotly ``layout.uirevision``. Keep it constant across live-tick
+            refreshes of the same ticker/range so zoom & pan survive; change it
+            (e.g. ``"AAPL:6M"``) when the ticker or range changes so Plotly fully
+            redraws instead of freezing on the previous series.
 
     Returns:
         A ``plotly.graph_objects.Figure``. Empty inputs yield an annotated blank figure.
@@ -555,7 +560,7 @@ def build_price_figure(
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02},
         margin={"l": 50, "r": 20, "t": 50, "b": 40},
         height=600 if num_subpanes > 0 else 480,
-        uirevision=True,  # uirevision keeps zoom / pan / hover state across @st.fragment tick refreshes
+        uirevision=uirevision,  # constant across live-tick refreshes; changes on ticker/range switch so Plotly redraws
     )
 
     # Disable rangeslider for candlestick traces (compress the pane stack)

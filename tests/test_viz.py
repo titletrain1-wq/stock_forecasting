@@ -76,6 +76,17 @@ def test_empty_inputs_return_figure_with_no_data_annotation() -> None:
     assert any("No data" in a.text for a in fig.layout.annotations)
 
 
+def test_uirevision_defaults_true_and_is_overridable() -> None:
+    # Default keeps zoom/pan stable across live-tick refreshes.
+    assert build_price_figure(BARS, []).layout.uirevision is True
+    # App passes "<symbol>:<range>" so a ticker/range switch forces Plotly to
+    # redraw instead of freezing on the previous series.
+    assert (
+        build_price_figure(BARS, [], uirevision="AAPL:6M").layout.uirevision
+        == "AAPL:6M"
+    )
+
+
 def test_actual_close_line_present() -> None:
     fig = build_price_figure(BARS, [])
     actual = [t for t in fig.data if t.name == "Actual"]
