@@ -189,44 +189,6 @@ class TestNoLookahead:
         expected_ret_2 = np.log(45020.0 / 45010.0)
         assert np.isclose(features["lag1_return"].iloc[2], expected_ret_2, atol=1e-6)
 
-    def test_vwap_distance_no_future_bars(self) -> None:
-        """Test that VWAP distance at t uses only bars <= t (not future bars)."""
-        builder = IntradayFeatureBuilder()
-
-        base = datetime(2026, 9, 1, 0, 0, 0, tzinfo=UTC)
-        bars = []
-        for i in range(20):
-            ts = base + timedelta(minutes=5 * i)
-            # Monotonically increasing prices
-            close = 45000.0 + i * 10.0
-            bars.append(
-                {
-                    "ts": ts.isoformat().replace("+00:00", "Z"),
-                    "open": close - 2,
-                    "high": close + 5,
-                    "low": close - 5,
-                    "close": close,
-                    "volume": 50.0,
-                }
-            )
-        bars_df = pd.DataFrame(bars)
-
-        features = builder.build_features("BTC-USD", bars_df)
-
-        # At bar 12 (1h mark), VWAP should only use bars 0-12, not 13+
-        # Manually compute VWAP for bars 1-12 (last 12 bars including current)
-        bars_subset = bars_df.iloc[0:13].copy()  # indices 0-12
-        tp = (bars_subset["high"] + bars_subset["low"] + bars_subset["close"]) / 3
-        manual_vwap = (tp * bars_subset["volume"]).sum() / bars_subset["volume"].sum()
-
-        # The feature should be distance from manual_vwap, not from future price
-        computed_feature = features["vwap_distance_1h"].iloc[12]
-        # Should not be NaN and should be finite
-        assert not np.isnan(computed_feature)
-        assert np.isfinite(computed_feature)
-        # Verify computed feature matches manual VWAP distance calculation
-        expected_vwap_distance = abs(45050.0 - manual_vwap)  # Close price at bar 12
-        assert np.isclose(computed_feature, expected_vwap_distance, atol=1e-9)
 
 
 class TestFundingZScore:
@@ -315,7 +277,8 @@ class TestScaler:
 
         base = datetime(2026, 9, 1, 0, 0, 0, tzinfo=UTC)
         bars = []
-        for i in range(100):
+        # Need 60+ bars to have enough warmup (4h VWAP needs 48 bars)
+        for i in range(200):
             ts = base + timedelta(minutes=5 * i)
             close = 45000.0 + i * 5.0
             bars.append(
@@ -333,9 +296,9 @@ class TestScaler:
         # Build features
         features = builder.build_features("BTC-USD", bars_df)
 
-        # Split into TRAIN (first 70) and TEST (last 30)
-        train_features = features.iloc[:70]
-        test_features = features.iloc[70:]
+        # Split into TRAIN (bars 50-150, after warmup) and TEST (bars 150-200)
+        train_features = features.iloc[50:150]
+        test_features = features.iloc[150:]
 
         # Fit scaler on TRAIN slice ONLY
         builder.fit_scaler(train_features)

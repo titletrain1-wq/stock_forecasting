@@ -291,7 +291,7 @@ class TestEndToEnd:
                 "stock_forecasting.intraday_trainer.fetch_intraday_bars_5m",
                 side_effect=mock_fetch_fn,
             ), patch(
-                "stock_forecasting.intraday_trainer._fetch_funding_rates_from_db"
+                "stock_forecasting.intraday_trainer.fetch_funding_rates_from_db"
             ) as MockFunding:
                 # Return empty funding (for simplicity)
                 MockFunding.return_value = pd.DataFrame(
@@ -374,7 +374,7 @@ class TestEndToEnd:
                 "stock_forecasting.intraday_trainer.fetch_intraday_bars_5m",
                 side_effect=mock_fetch_fn,
             ), patch(
-                "stock_forecasting.intraday_trainer._fetch_funding_rates_from_db"
+                "stock_forecasting.intraday_trainer.fetch_funding_rates_from_db"
             ) as MockFunding:
                 MockFunding.return_value = pd.DataFrame(
                     columns=["ts", "funding_rate"]
