@@ -703,3 +703,102 @@ def add_live_price_line(
         )
     )
     return fig
+
+
+INTRADAY_HORIZON_COLOR = {"15m": "#FF6347", "1h": "#FF8C00", "4h": "#9932CC"}
+
+
+class _IntradayForecastLike(Protocol):
+    horizon: str
+    anchor_ts: str
+    anchor_price: float
+    predicted_price: float
+    ci_lower_price: float
+    ci_upper_price: float
+    target_ts: str
+
+
+def build_intraday_forecast_figure(
+    bars: Sequence[_IntradayBarLike],
+    forecasts: Sequence[_IntradayForecastLike],
+    title: str = "Intraday forecast",
+) -> go.Figure:
+    """Compact recent-price + short-horizon forecast chart (crypto 15m/1h/4h).
+
+    Draws the recent 5-minute closes, then for each forecast a dashed
+    anchor->target segment plus a filled CI wedge that widens to the target.
+    Read-only: the caller passes rows straight from ``intraday_bars_history``
+    and ``intraday_prediction_snapshots``.
+    """
+    fig = go.Figure()
+    ordered = sorted(bars, key=lambda b: str(b.ts))
+    if ordered:
+        fig.add_trace(
+            go.Scatter(
+                x=[b.ts for b in ordered],
+                y=[b.close for b in ordered],
+                name="price (5m)",
+                mode="lines",
+                line={"color": ACTUAL_COLOR, "width": 1.5},
+                hovertemplate="%{x}<br>%{y:.2f}<extra></extra>",
+            )
+        )
+
+    for fc in sorted(forecasts, key=lambda f: f.target_ts):
+        color = INTRADAY_HORIZON_COLOR.get(fc.horizon, "#888")
+        fig.add_trace(
+            go.Scatter(
+                x=[fc.anchor_ts, fc.target_ts],
+                y=[fc.anchor_price, fc.ci_upper_price],
+                mode="lines",
+                line={"width": 0},
+                showlegend=False,
+                hoverinfo="skip",
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=[fc.anchor_ts, fc.target_ts],
+                y=[fc.anchor_price, fc.ci_lower_price],
+                mode="lines",
+                line={"width": 0},
+                fill="tonexty",
+                fillcolor=f"rgba{(*_hex_rgb(color), 0.15)}",
+                showlegend=False,
+                hoverinfo="skip",
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=[fc.anchor_ts, fc.target_ts],
+                y=[fc.anchor_price, fc.predicted_price],
+                name=f"{fc.horizon} forecast",
+                mode="lines+markers",
+                line={"color": color, "width": 2, "dash": "dash"},
+                marker={"size": 7},
+                hovertemplate=(
+                    f"{fc.horizon} forecast<br>%{{x}}<br>"
+                    f"%{{y:.2f}} (CI {fc.ci_lower_price:.2f}-{fc.ci_upper_price:.2f})"
+                    "<extra></extra>"
+                ),
+            )
+        )
+
+    fig.update_layout(
+        title=title,
+        height=320,
+        margin={"l": 40, "r": 20, "t": 40, "b": 30},
+        showlegend=True,
+        hovermode="x unified",
+    )
+    if not ordered and not forecasts:
+        fig.add_annotation(
+            text="No intraday forecast yet — the worker writes one each hour.",
+            showarrow=False,
+        )
+    return fig
+
+
+def _hex_rgb(hex_color: str) -> tuple[int, int, int]:
+    h = hex_color.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)

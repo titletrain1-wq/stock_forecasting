@@ -25,6 +25,8 @@ from stock_forecasting.panels import (
 )
 from stock_forecasting.schema import (
     AccuracyRecord,
+    IntradayBarsHistory,
+    IntradayPredictionSnapshot,
     OhlcvBar,
     PredictionSnapshot,
     SystemHeartbeat,
@@ -34,8 +36,11 @@ from stock_forecasting.viz import (
     CI_DISCLAIMER,
     DEFAULT_LATEST_HORIZONS,
     add_live_price_line,
+    build_intraday_forecast_figure,
     build_price_figure,
 )
+
+INTRADAY_CRYPTO = {"BTC-USD", "ETH-USD"}
 
 RANGE_DAYS: dict[str, int] = {"1M": 31, "3M": 93, "6M": 186, "1Y": 372}
 
@@ -256,6 +261,73 @@ def render_chart_panel(engine, symbol: str, ticker: Ticker) -> None:
     st.caption(CI_DISCLAIMER)
 
 
+def load_intraday_history(engine, symbol: str, hours: int = 36) -> list:
+    """Recent closed 5m bars from intraday_bars_history for the intraday panel."""
+    cutoff = (
+        (datetime.now(UTC) - timedelta(hours=hours)).isoformat().replace("+00:00", "Z")
+    )
+    with Session(engine) as session:
+        return list(
+            session.exec(
+                select(IntradayBarsHistory)
+                .where(
+                    IntradayBarsHistory.ticker == symbol,
+                    IntradayBarsHistory.interval == "5m",
+                    IntradayBarsHistory.ts >= cutoff,
+                )
+                .order_by(IntradayBarsHistory.ts.asc())
+            ).all()
+        )
+
+
+def load_intraday_forecasts(engine, symbol: str) -> list:
+    """Latest intraday forecast per horizon for a ticker."""
+    with Session(engine) as session:
+        rows = list(
+            session.exec(
+                select(IntradayPredictionSnapshot)
+                .where(IntradayPredictionSnapshot.ticker == symbol)
+                .order_by(IntradayPredictionSnapshot.made_at.desc())
+            ).all()
+        )
+    latest: dict[str, object] = {}
+    for r in rows:
+        latest.setdefault(r.horizon, r)
+    return list(latest.values())
+
+
+def render_intraday_forecast_panel(engine, symbol: str, ticker: Ticker) -> None:
+    """Short-horizon (15m/1h/4h) crypto forecast chart + readout. Design §7."""
+    if symbol not in INTRADAY_CRYPTO:
+        return
+    forecasts = load_intraday_forecasts(engine, symbol)
+    bars = load_intraday_history(engine, symbol)
+    st.subheader("Intraday forecast (crypto)")
+    if not forecasts:
+        st.caption(
+            "No intraday forecast yet — the hourly `job_intraday_forecast` "
+            "worker job writes one once models are trained and bars are ingested."
+        )
+        return
+    cols = st.columns(len(forecasts))
+    for col, fc in zip(
+        cols, sorted(forecasts, key=lambda f: f.target_ts), strict=False
+    ):
+        move = (fc.predicted_price / fc.anchor_price - 1) * 100
+        col.metric(
+            f"{fc.horizon} → {fc.target_ts[11:16]} UTC",
+            f"{fc.predicted_price:,.0f}",
+            f"{move:+.2f}%",
+        )
+        col.caption(f"CI {fc.ci_lower_price:,.0f} – {fc.ci_upper_price:,.0f}")
+    fig = build_intraday_forecast_figure(bars, forecasts, title=f"{symbol} · intraday")
+    st.plotly_chart(fig, use_container_width=True, key="intraday_forecast_chart")
+    st.caption(
+        "Forecast anchored to the last closed 5-minute bar; graded when the "
+        "target bar closes. Separate from the daily model above."
+    )
+
+
 def render_accuracy_panel(engine, symbol: str) -> None:
     """Accuracy table (one row per horizon) + one-line trust verdicts. Spec §9."""
     st.subheader("Accuracy")
@@ -408,6 +480,7 @@ def main() -> None:
     symbol = st.selectbox("Ticker", [t.symbol for t in tickers])
     ticker = next(t for t in tickers if t.symbol == symbol)
     render_chart_panel(engine, symbol, ticker)
+    render_intraday_forecast_panel(engine, symbol, ticker)
     render_accuracy_panel(engine, symbol)
     render_explain_panel(engine, symbol)
     render_health_panel(engine)
