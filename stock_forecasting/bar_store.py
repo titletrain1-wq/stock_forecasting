@@ -69,10 +69,19 @@ class BarRepository:
             return 0
 
         now_str = datetime.now(UTC).isoformat()
+        today_utc = datetime.now(UTC).date()
         inserted_count = 0
         valid_bars: list[Bar] = []
 
-        for bar in bars:
+        # Filter out bars from today (forming/provisional candles).
+        # Spec requires closed bars only; today's bar is still forming.
+        bars_filtered = []
+        for b in bars:
+            ts = b.ts if hasattr(b, 'ts') else b.get('ts', '')
+            if not ts.startswith(today_utc.isoformat()):
+                bars_filtered.append(b)
+
+        for bar in bars_filtered:
             reasons = self._validate_bar(bar)
             if reasons:
                 raw_payload = (
