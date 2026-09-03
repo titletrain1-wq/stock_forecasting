@@ -372,7 +372,7 @@ def main() -> None:
 
     st.title("Stock Forecast View")
     for warn in st.session_state.get("_bootstrap_warnings", []):
-        st.caption(f"⚠️ startup: {warn}")
+        st.caption(f"startup warning - {warn}")
     if not tickers:
         st.info("Add a ticker in the sidebar to get started.")
         return
