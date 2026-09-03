@@ -101,7 +101,8 @@ class IntradayFeatureBuilder:
             df["close"].shift(12)
         )  # 12 bars = 1h
 
-        # 6. dYdX Funding-Rate Z-Score (24h window, as-of join, no lookahead)
+        # 6. dYdX Funding-Rate Z-Score (14-day rolling z-score on DAILY funding, per god ruling)
+        # Note: crypto_derivatives.ts is day-aligned (00:00:00Z); hourly ingestion = future T-016
         if funding_df is not None and not funding_df.empty:
             df = self._add_funding_z_score(df, funding_df)
         else:
@@ -141,11 +142,14 @@ class IntradayFeatureBuilder:
     def _add_funding_z_score(
         self, bars_df: pd.DataFrame, funding_df: pd.DataFrame
     ) -> pd.DataFrame:
-        """Add funding-rate z-score feature (24h window, as-of join, no lookahead).
+        """Add funding-rate z-score feature (14-day rolling window on DAILY funding, per god ruling).
+
+        Note: crypto_derivatives.ts is day-aligned (00:00:00Z); hourly ingestion = future T-016.
+        Computes z-score of DAILY funding rates over 14-day window.
 
         Args:
             bars_df: 5-minute bars with ts column.
-            funding_df: Funding rates with ts and funding_rate columns.
+            funding_df: Daily funding rates with ts and funding_rate columns.
 
         Returns:
             bars_df with added 'funding_zscore' column.
@@ -156,31 +160,33 @@ class IntradayFeatureBuilder:
         bars_df["ts"] = pd.to_datetime(bars_df["ts"], utc=True)
         funding_df["ts"] = pd.to_datetime(funding_df["ts"], utc=True)
 
-        # As-of join: each bar gets the last funding rate published at or before its time
-        merged = pd.merge_asof(
-            bars_df.sort_values("ts"),
-            funding_df.sort_values("ts"),
-            on="ts",
-            direction="backward",
-            suffixes=("", "_funding"),
+        # Extract date from bars (for merging with daily funding)
+        bars_df["date"] = bars_df["ts"].dt.date
+        funding_df["date"] = pd.to_datetime(funding_df["ts"]).dt.date
+
+        # Merge bars to daily funding rates by date (left merge keeps all bars)
+        merged = bars_df.merge(funding_df, on="date", how="left", suffixes=("", "_funding"))
+
+        # Compute z-score over 14-day rolling window of DAILY funding rates
+        # (groupby date to get one value per day, then compute rolling stats)
+        daily_funding = merged.groupby("date")["funding_rate"].first().reset_index()
+        daily_funding["funding_mean_14d"] = (
+            daily_funding["funding_rate"].rolling(14, min_periods=1).mean()
+        )
+        daily_funding["funding_std_14d"] = (
+            daily_funding["funding_rate"].rolling(14, min_periods=1).std()
+        )
+        daily_funding["funding_zscore"] = (
+            daily_funding["funding_rate"] - daily_funding["funding_mean_14d"]
+        ) / (daily_funding["funding_std_14d"] + 1e-9)
+
+        # Merge z-scores back to bars (one value per date)
+        merged_z = merged.merge(
+            daily_funding[["date", "funding_zscore"]], on="date", how="left"
         )
 
-        # Zero-order hold: fill missing funding rates forward (same value for 12 bars within an hour)
-        merged["funding_rate"] = merged["funding_rate"].ffill()
-
-        # Compute z-score over 24h rolling window (24h = 288 5-minute bars)
-        merged["funding_mean"] = (
-            merged["funding_rate"].rolling(288, min_periods=1).mean()
-        )
-        merged["funding_std"] = (
-            merged["funding_rate"].rolling(288, min_periods=1).std()
-        )
-        merged["funding_zscore"] = (
-            merged["funding_rate"] - merged["funding_mean"]
-        ) / (merged["funding_std"] + 1e-9)
-
-        # Clean up and return
-        bars_df["funding_zscore"] = merged["funding_zscore"]
+        # Return bars with funding_zscore
+        bars_df["funding_zscore"] = merged_z["funding_zscore"]
         return bars_df
 
     def fit_scaler(self, train_features: pd.DataFrame) -> None:
