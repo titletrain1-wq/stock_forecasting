@@ -526,12 +526,10 @@ def test_backfill_fails_over_to_fallback(db_session: Session) -> None:
 
 def test_bar_repository_filters_forming_candles(db_session: Session) -> None:
     """Verify BarRepository skips today's forming/provisional candles (Issue c)."""
-    from datetime import datetime, UTC
+    from datetime import UTC, datetime, timedelta
 
     _create_sample_ticker(db_session, "BTC")
     repo = BarRepository(db_session)
-
-    from datetime import timedelta
 
     today = datetime.now(UTC).date()
     today_ts = f"{today.isoformat()}T00:00:00Z"

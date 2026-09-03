@@ -20,6 +20,7 @@ Spec §7 "Technical indicators":
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from typing import Any, Protocol
 
@@ -27,6 +28,8 @@ import pandas as pd
 import pandas_ta as ta
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+
+logger = logging.getLogger(__name__)
 
 ACTUAL_COLOR = "#2962FF"
 RIBBON_COLOR = "#FF6D00"
@@ -142,9 +145,9 @@ def _compute_indicators(bars: list[_BarLike]) -> dict[str, Any]:
         # Volume sub-pane
         result["volume"] = df["volume"].tolist()
         result["volume_sma"] = ta.sma(df["volume"], length=20).tolist()
-    except Exception:
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError) as e:
         # Gracefully handle indicator computation errors (e.g., insufficient data)
-        pass
+        logger.warning(f"Indicator computation failed: {e}")
 
     return result
 
@@ -530,9 +533,11 @@ def build_price_figure(
     }
 
     fig.update_yaxes(title_text="Price", row=1, col=1)
-    for row_idx, (yaxis_key, title) in enumerate(subpane_titles.items(), start=2):
-        if title:
-            fig.update_yaxes(title_text=title, row=row_idx, col=1)
+    for row_idx, (yaxis_key, subpane_title) in enumerate(
+        subpane_titles.items(), start=2
+    ):
+        if subpane_title:
+            fig.update_yaxes(title_text=subpane_title, row=row_idx, col=1)
 
     fig.update_layout(
         title=title,
