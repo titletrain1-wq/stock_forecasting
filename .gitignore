@@ -10,3 +10,4 @@ model_store/
 *.joblib
 *.pkl
 .DS_Store
+.deploy-secrets.env

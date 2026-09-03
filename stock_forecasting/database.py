@@ -56,13 +56,21 @@ def get_engine(db_path: str | None = None) -> Engine:
 
     # Check if Turso is configured (both URL and preferably auth token)
     if settings.turso_database_url and settings.turso_database_url.strip():
-        # Use libSQL/Turso engine (requires sqlalchemy-libsql package)
-        # URL format: sqlite+libsql://[host]?authToken=[token]&secure=true
-        url = settings.turso_database_url
-        if settings.turso_auth_token:
-            # Append auth token if provided
-            separator = "&" if "?" in url else "?"
-            url = f"{url}{separator}authToken={settings.turso_auth_token}"
+        # Use libSQL/Turso engine (requires sqlalchemy-libsql package).
+        # Accept the raw Turso URL ("libsql://host") or an already-qualified
+        # SQLAlchemy URL ("sqlite+libsql://host") and normalise to the dialect
+        # form: sqlite+libsql://host?authToken=<token>&secure=true
+        raw = settings.turso_database_url.strip()
+        host = raw.split("://", 1)[-1]
+        base, _, existing_qs = host.partition("?")
+        params = [p for p in existing_qs.split("&") if p]
+        if settings.turso_auth_token and not any(
+            p.startswith("authToken=") for p in params
+        ):
+            params.append(f"authToken={settings.turso_auth_token}")
+        if not any(p.startswith("secure=") for p in params):
+            params.append("secure=true")
+        url = f"sqlite+libsql://{base}?{'&'.join(params)}"
         try:
             return create_sqlmodel_engine(
                 url,
