@@ -11,7 +11,6 @@ from datetime import UTC, date, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
-import pytest
 from sqlmodel import Session
 
 from stock_forecasting.intraday_pipeline import (
@@ -100,7 +99,14 @@ class TestCoinbaseBackfill:
         mock_bars = [
             [int(current.timestamp()), 45000, 45100, 45050, 45075, 10.5],  # valid
             "invalid",  # invalid
-            [int((current + timedelta(minutes=5)).timestamp()), 45075, 45150, 45100, 45125, 11.0],
+            [
+                int((current + timedelta(minutes=5)).timestamp()),
+                45075,
+                45150,
+                45100,
+                45125,
+                11.0,
+            ],
         ]
 
         mock_response = MagicMock()
@@ -124,14 +130,16 @@ class TestFundingAsOfJoin:
         base = datetime(2026, 9, 1, 0, 0, 0, tzinfo=UTC)
         for i in range(5):
             ts = base + timedelta(hours=i)
-            bars_data.append({
-                "ts": ts,
-                "o": 45000.0 + i * 100,
-                "h": 45100.0 + i * 100,
-                "l": 44900.0 + i * 100,
-                "c": 45050.0 + i * 100,
-                "v": 10.5 + i,
-            })
+            bars_data.append(
+                {
+                    "ts": ts,
+                    "o": 45000.0 + i * 100,
+                    "h": 45100.0 + i * 100,
+                    "l": 44900.0 + i * 100,
+                    "c": 45050.0 + i * 100,
+                    "v": 10.5 + i,
+                }
+            )
         bars_df = pd.DataFrame(bars_data)
 
         # Create funding rates: published at 00:30, 02:30, 04:30 UTC
@@ -154,9 +162,13 @@ class TestFundingAsOfJoin:
 
         assert pd.isna(result.iloc[0]["funding_rate"])  # Hour 0: no prior
         assert result.iloc[1]["funding_rate"] == 0.0001  # Hour 1: rate from 00:30
-        assert result.iloc[2]["funding_rate"] == 0.0001  # Hour 2: rate from 00:30 (backward join)
+        assert (
+            result.iloc[2]["funding_rate"] == 0.0001
+        )  # Hour 2: rate from 00:30 (backward join)
         assert result.iloc[3]["funding_rate"] == 0.0002  # Hour 3: rate from 02:30
-        assert result.iloc[4]["funding_rate"] == 0.0002  # Hour 4: rate from 02:30 (backward join)
+        assert (
+            result.iloc[4]["funding_rate"] == 0.0002
+        )  # Hour 4: rate from 02:30 (backward join)
 
     def test_as_of_join_empty_funding(self) -> None:
         """Test that as-of join with empty funding returns bars with NaN funding."""
@@ -186,28 +198,30 @@ class TestAnchorFiltering:
         # Create data at various minute markers
         base = datetime(2026, 9, 1, 0, 0, 0, tzinfo=UTC)
         timestamps = [
-            base + timedelta(minutes=0),   # 00:00 - valid (both 1h and 4h)
-            base + timedelta(minutes=4),   # 00:04 - valid (4h only)
-            base + timedelta(minutes=5),   # 00:05 - invalid
-            base + timedelta(minutes=8),   # 00:08 - valid (4h only)
+            base + timedelta(minutes=0),  # 00:00 - valid (both 1h and 4h)
+            base + timedelta(minutes=4),  # 00:04 - valid (4h only)
+            base + timedelta(minutes=5),  # 00:05 - invalid
+            base + timedelta(minutes=8),  # 00:08 - valid (4h only)
             base + timedelta(minutes=12),  # 00:12 - valid (4h only)
             base + timedelta(minutes=15),  # 00:15 - invalid
             base + timedelta(minutes=16),  # 00:16 - valid (4h only)
             base + timedelta(minutes=20),  # 00:20 - valid (4h only)
             base + timedelta(minutes=25),  # 00:25 - invalid
-            base + timedelta(hours=1, minutes=0),   # 01:00 - valid (both 1h and 4h)
+            base + timedelta(hours=1, minutes=0),  # 01:00 - valid (both 1h and 4h)
         ]
 
         df_data = []
         for ts in timestamps:
-            df_data.append({
-                "ts": ts,
-                "o": 45000.0,
-                "h": 45100.0,
-                "l": 44900.0,
-                "c": 45050.0,
-                "v": 10.5,
-            })
+            df_data.append(
+                {
+                    "ts": ts,
+                    "o": 45000.0,
+                    "h": 45100.0,
+                    "l": 44900.0,
+                    "c": 45050.0,
+                    "v": 10.5,
+                }
+            )
         df = pd.DataFrame(df_data)
 
         # Filter
@@ -225,7 +239,9 @@ class TestAnchorFiltering:
             minute = row["ts"].minute
             hour = row["ts"].hour
             is_1h_anchor = minute == 0
-            is_4h_anchor = minute in [4, 8, 12, 16, 20] or (hour % 4 == 0 and minute == 0)
+            is_4h_anchor = minute in [4, 8, 12, 16, 20] or (
+                hour % 4 == 0 and minute == 0
+            )
             assert is_1h_anchor or is_4h_anchor, f"Invalid anchor at {row['ts']}"
 
     def testfilter_closed_bar_anchors_empty(self) -> None:
@@ -255,7 +271,9 @@ class TestEndToEnd:
         db_session.commit()
 
         # Mock Coinbase provider
-        with patch("stock_forecasting.intraday_trainer.CoinbaseProvider") as MockCoinbase:
+        with patch(
+            "stock_forecasting.intraday_trainer.CoinbaseProvider"
+        ) as MockCoinbase:
             mock_coinbase = MagicMock()
             MockCoinbase.return_value = mock_coinbase
 
@@ -274,30 +292,43 @@ class TestEndToEnd:
                     epoch = item[0]
                     dt = datetime.fromtimestamp(epoch, tz=UTC)
                     if start <= dt.date() <= end:
-                        result.append({
-                            "ts": dt.isoformat().replace("+00:00", "Z"),
-                            "interval": "5m",
-                            "o": item[3],
-                            "h": item[2],
-                            "l": item[1],
-                            "c": item[4],
-                            "v": item[5],
-                        })
+                        result.append(
+                            {
+                                "ts": dt.isoformat().replace("+00:00", "Z"),
+                                "interval": "5m",
+                                "o": item[3],
+                                "h": item[2],
+                                "l": item[1],
+                                "c": item[4],
+                                "v": item[5],
+                            }
+                        )
                 return result
 
             # Patch the fetch function
-            with patch("stock_forecasting.intraday_trainer.fetch_intraday_bars_5m", side_effect=mock_fetch_fn):
-                with patch("stock_forecasting.intraday_trainer._fetch_funding_rates_from_db") as MockFunding:
-                    # Return empty funding (for simplicity)
-                    MockFunding.return_value = pd.DataFrame(columns=["ts", "funding_rate"])
+            with patch(
+                "stock_forecasting.intraday_trainer.fetch_intraday_bars_5m",
+                side_effect=mock_fetch_fn,
+            ), patch(
+                "stock_forecasting.intraday_trainer._fetch_funding_rates_from_db"
+            ) as MockFunding:
+                # Return empty funding (for simplicity)
+                MockFunding.return_value = pd.DataFrame(
+                    columns=["ts", "funding_rate"]
+                )
 
-                    # Run backfill
-                    backfill_intraday_bars(session=db_session, tickers=["BTC-USD"], test_mode=True)
+                # Run backfill
+                backfill_intraday_bars(
+                    session=db_session, tickers=["BTC-USD"], test_mode=True
+                )
 
             # Verify rows were written to intraday_bars_history
             from sqlmodel import select
+
             rows = db_session.exec(
-                select(IntradayBarsHistory).where(IntradayBarsHistory.ticker == "BTC-USD")
+                select(IntradayBarsHistory).where(
+                    IntradayBarsHistory.ticker == "BTC-USD"
+                )
             ).all()
 
             # Should have ~288 rows per day * 2 days after anchor filtering
@@ -341,26 +372,40 @@ class TestEndToEnd:
         initial_id = bar1.id
 
         # Mock backfill to try inserting the same bar
-        with patch("stock_forecasting.intraday_trainer.CoinbaseProvider") as MockCoinbase:
+        with patch(
+            "stock_forecasting.intraday_trainer.CoinbaseProvider"
+        ) as MockCoinbase:
+
             def mock_fetch_fn(provider, ticker, start, end, **kwargs):
-                return [{
-                    "ts": ts_str,
-                    "interval": "5m",
-                    "o": 2500.0,
-                    "h": 2510.0,
-                    "l": 2490.0,
-                    "c": 2505.0,
-                    "v": 100.0,
-                }]
+                return [
+                    {
+                        "ts": ts_str,
+                        "interval": "5m",
+                        "o": 2500.0,
+                        "h": 2510.0,
+                        "l": 2490.0,
+                        "c": 2505.0,
+                        "v": 100.0,
+                    }
+                ]
 
-            with patch("stock_forecasting.intraday_trainer.fetch_intraday_bars_5m", side_effect=mock_fetch_fn):
-                with patch("stock_forecasting.intraday_trainer._fetch_funding_rates_from_db") as MockFunding:
-                    MockFunding.return_value = pd.DataFrame(columns=["ts", "funding_rate"])
+            with patch(
+                "stock_forecasting.intraday_trainer.fetch_intraday_bars_5m",
+                side_effect=mock_fetch_fn,
+            ), patch(
+                "stock_forecasting.intraday_trainer._fetch_funding_rates_from_db"
+            ) as MockFunding:
+                MockFunding.return_value = pd.DataFrame(
+                    columns=["ts", "funding_rate"]
+                )
 
-                    backfill_intraday_bars(session=db_session, tickers=["ETH-USD"], test_mode=True)
+                backfill_intraday_bars(
+                    session=db_session, tickers=["ETH-USD"], test_mode=True
+                )
 
         # Verify only one row exists (dedup worked)
         from sqlmodel import select
+
         rows = db_session.exec(
             select(IntradayBarsHistory).where(
                 (IntradayBarsHistory.ticker == "ETH-USD")

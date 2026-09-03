@@ -7,15 +7,11 @@ Tests that verify:
 - Retention triggers are configured
 """
 
-import os
-import tempfile
 from pathlib import Path
 
-import pytest
 import sqlalchemy
 
 from stock_forecasting.config import get_settings
-from stock_forecasting.database import create_tables, get_engine
 from stock_forecasting.schema import (
     IntradayAccuracyRecord,
     IntradayBarsHistory,
@@ -31,7 +27,9 @@ def test_intraday_bars_history_table_exists(temp_db: sqlalchemy.Engine) -> None:
 
     # Verify unique constraint on (ticker, interval, ts)
     inspector = sqlalchemy.inspect(temp_db)
-    constraints = [c["name"] for c in inspector.get_unique_constraints("intraday_bars_history")]
+    constraints = [
+        c["name"] for c in inspector.get_unique_constraints("intraday_bars_history")
+    ]
     assert "uq_intraday_bars_history" in constraints
 
 
@@ -42,7 +40,10 @@ def test_intraday_prediction_snapshots_table_exists(temp_db: sqlalchemy.Engine) 
 
     # Verify unique constraint on (ticker, horizon, anchor_ts) for dedup
     inspector = sqlalchemy.inspect(temp_db)
-    constraints = [c["name"] for c in inspector.get_unique_constraints("intraday_prediction_snapshots")]
+    constraints = [
+        c["name"]
+        for c in inspector.get_unique_constraints("intraday_prediction_snapshots")
+    ]
     assert "uq_intraday_forecast" in constraints
 
 
@@ -88,9 +89,11 @@ def test_intraday_bars_history_insert(temp_db: sqlalchemy.Engine) -> None:
         session.commit()
 
         # Verify row was inserted
-        queried = session.query(IntradayBarsHistory).filter_by(
-            ticker="BTC-USD", interval="5m", ts="2026-09-01T00:00:00Z"
-        ).first()
+        queried = (
+            session.query(IntradayBarsHistory)
+            .filter_by(ticker="BTC-USD", interval="5m", ts="2026-09-01T00:00:00Z")
+            .first()
+        )
         assert queried is not None
         assert queried.close == 45050.0
 
@@ -135,9 +138,11 @@ def test_intraday_prediction_snapshot_insert(temp_db: sqlalchemy.Engine) -> None
         session.commit()
 
         # Verify row was inserted
-        queried = session.query(IntradayPredictionSnapshot).filter_by(
-            ticker="ETH-USD", horizon="1h", anchor_ts="2026-09-01T10:00:00Z"
-        ).first()
+        queried = (
+            session.query(IntradayPredictionSnapshot)
+            .filter_by(ticker="ETH-USD", horizon="1h", anchor_ts="2026-09-01T10:00:00Z")
+            .first()
+        )
         assert queried is not None
         assert queried.predicted_price == 2525.0
 
@@ -198,9 +203,11 @@ def test_intraday_accuracy_record_insert(temp_db: sqlalchemy.Engine) -> None:
         session.commit()
 
         # Verify row was inserted
-        queried = session.query(IntradayAccuracyRecord).filter_by(
-            prediction_id=prediction.id
-        ).first()
+        queried = (
+            session.query(IntradayAccuracyRecord)
+            .filter_by(prediction_id=prediction.id)
+            .first()
+        )
         assert queried is not None
         assert queried.direction_hit == 1
 
@@ -217,7 +224,9 @@ def test_intraday_config_settings_parse() -> None:
     assert settings.intraday_lookback_days == 365  # god ruling F3
 
     assert hasattr(settings, "intraday_bars_history_retention_days")
-    assert settings.intraday_bars_history_retention_days == 365  # immutable ML store (F2)
+    assert (
+        settings.intraday_bars_history_retention_days == 365
+    )  # immutable ML store (F2)
 
     assert hasattr(settings, "intraday_forecast_writer_interval_seconds")
     assert settings.intraday_forecast_writer_interval_seconds == 3600

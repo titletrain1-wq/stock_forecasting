@@ -35,7 +35,7 @@ def fetch_intraday_bars_5m(
 
     product_id = provider.resolve_product_id(ticker)
     client = provider._get_client()
-    close_client = True if provider._client is None else False
+    close_client = provider._client is None
 
     try:
         all_bars: dict[str, dict] = {}
@@ -108,8 +108,12 @@ def fetch_funding_rates_from_db(
 
     Returns a DataFrame with columns: ts (datetime), funding_rate (float).
     """
-    start_iso = datetime.combine(start, time.min, tzinfo=UTC).isoformat().replace("+00:00", "Z")
-    end_iso = datetime.combine(end, time.max, tzinfo=UTC).isoformat().replace("+00:00", "Z")
+    start_iso = (
+        datetime.combine(start, time.min, tzinfo=UTC).isoformat().replace("+00:00", "Z")
+    )
+    end_iso = (
+        datetime.combine(end, time.max, tzinfo=UTC).isoformat().replace("+00:00", "Z")
+    )
 
     rows = session.exec(
         select(CryptoDerivative).where(

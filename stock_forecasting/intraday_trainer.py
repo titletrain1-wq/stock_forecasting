@@ -15,7 +15,7 @@ from stock_forecasting.intraday_pipeline import (
     filter_closed_bar_anchors,
 )
 from stock_forecasting.providers.coinbase import CoinbaseProvider
-from stock_forecasting.schema import IntradayBarsHistory, Ticker
+from stock_forecasting.schema import Ticker
 
 logger = logging.getLogger(__name__)
 
@@ -83,12 +83,17 @@ def backfill_intraday_bars(
 
             # Convert to DataFrame
             import pandas as pd
+
             bars_df = pd.DataFrame(bars_list)
             bars_df["ts"] = pd.to_datetime(bars_df["ts"], utc=True)
 
             # Fetch funding rates from crypto_derivatives table (dYdX ingestion)
-            funding_df = fetch_funding_rates_from_db(session, ticker_str, start_date, end_date)
-            logger.info(f"  Fetched {len(funding_df)} daily funding rates for {ticker_str}")
+            funding_df = fetch_funding_rates_from_db(
+                session, ticker_str, start_date, end_date
+            )
+            logger.info(
+                f"  Fetched {len(funding_df)} daily funding rates for {ticker_str}"
+            )
 
             # Perform as-of join (validates no lookahead per F9)
             _, joined_df = as_of_join_funding(bars_df, funding_df)
@@ -108,27 +113,31 @@ def backfill_intraday_bars(
             rows_to_insert = []
             for _, row in anchored_df.iterrows():
                 ts_str = row["ts"].isoformat().replace("+00:00", "Z")
-                rows_to_insert.append((
-                    ticker_str,
-                    "5m",
-                    ts_str,
-                    float(row["o"]),
-                    float(row["h"]),
-                    float(row["l"]),
-                    float(row["c"]),
-                    float(row["v"]),
-                    "coinbase_rest",
-                    ingested_now,
-                ))
+                rows_to_insert.append(
+                    (
+                        ticker_str,
+                        "5m",
+                        ts_str,
+                        float(row["o"]),
+                        float(row["h"]),
+                        float(row["l"]),
+                        float(row["c"]),
+                        float(row["v"]),
+                        "coinbase_rest",
+                        ingested_now,
+                    )
+                )
 
             # Execute batch insert with INSERT OR IGNORE
             connection = session.connection()
             connection.execute(text(insert_sql), rows_to_insert)
             session.commit()
-            logger.info(f"  Wrote {len(anchored_df)} anchored bars to intraday_bars_history (INSERT OR IGNORE)")
+            logger.info(
+                f"  Wrote {len(anchored_df)} anchored bars to intraday_bars_history (INSERT OR IGNORE)"
+            )
 
     except Exception as e:
-        logger.error(f"Backfill failed: {e}", exc_info=True)
+        logger.exception(f"Backfill failed: {e}")
         session.rollback()
         raise
 

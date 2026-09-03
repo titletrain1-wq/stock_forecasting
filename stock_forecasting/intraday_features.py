@@ -5,10 +5,10 @@ from datetime import UTC, datetime, timedelta
 
 import numpy as np
 import pandas as pd
-from sqlmodel import Session, select
 from sklearn.preprocessing import StandardScaler
+from sqlmodel import Session, select
 
-from stock_forecasting.schema import IntradayBarsHistory, CryptoDerivative
+from stock_forecasting.schema import CryptoDerivative, IntradayBarsHistory
 
 logger = logging.getLogger(__name__)
 
@@ -94,12 +94,8 @@ class IntradayFeatureBuilder:
 
         # 5. Lagged Log-Returns (3 lags: 1 bar, 5 bars, 12 bars)
         df["lag1_return"] = returns  # 1 bar (5m)
-        df["lag5m_return"] = _compute_log_returns(
-            df["close"].shift(1)
-        )  # Approx 5m lag
-        df["lag1h_return"] = _compute_log_returns(
-            df["close"].shift(12)
-        )  # 12 bars = 1h
+        df["lag5m_return"] = _compute_log_returns(df["close"].shift(1))  # Approx 5m lag
+        df["lag1h_return"] = _compute_log_returns(df["close"].shift(12))  # 12 bars = 1h
 
         # 6. dYdX Funding-Rate Z-Score (14-day rolling z-score on DAILY funding, per god ruling)
         # Note: crypto_derivatives.ts is day-aligned (00:00:00Z); hourly ingestion = future T-016
@@ -165,7 +161,9 @@ class IntradayFeatureBuilder:
         funding_df["date"] = pd.to_datetime(funding_df["ts"]).dt.date
 
         # Merge bars to daily funding rates by date (left merge keeps all bars)
-        merged = bars_df.merge(funding_df, on="date", how="left", suffixes=("", "_funding"))
+        merged = bars_df.merge(
+            funding_df, on="date", how="left", suffixes=("", "_funding")
+        )
 
         # Compute z-score over 14-day rolling window of DAILY funding rates
         # (groupby date to get one value per day, then compute rolling stats)
@@ -234,8 +232,16 @@ def fetch_bars_and_funding(
     end_date = datetime.now(UTC).date()
     start_date = end_date - timedelta(days=lookback_days)
 
-    start_iso = datetime.combine(start_date, datetime.min.time(), tzinfo=UTC).isoformat().replace("+00:00", "Z")
-    end_iso = datetime.combine(end_date, datetime.max.time(), tzinfo=UTC).isoformat().replace("+00:00", "Z")
+    start_iso = (
+        datetime.combine(start_date, datetime.min.time(), tzinfo=UTC)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    end_iso = (
+        datetime.combine(end_date, datetime.max.time(), tzinfo=UTC)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
     # Fetch bars
     bar_rows = session.exec(

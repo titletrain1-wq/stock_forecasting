@@ -27,12 +27,14 @@ class TestVWAPComputation:
 
     def test_compute_vwap_basic(self) -> None:
         """Test VWAP computation on simple fixture."""
-        df = pd.DataFrame({
-            "high": [100.0, 101.0, 102.0],
-            "low": [99.0, 100.0, 101.0],
-            "close": [100.0, 101.0, 102.0],
-            "volume": [1000.0, 1000.0, 1000.0],
-        })
+        df = pd.DataFrame(
+            {
+                "high": [100.0, 101.0, 102.0],
+                "low": [99.0, 100.0, 101.0],
+                "close": [100.0, 101.0, 102.0],
+                "volume": [1000.0, 1000.0, 1000.0],
+            }
+        )
 
         vwap = _compute_vwap(df, window=3)
 
@@ -57,14 +59,16 @@ class TestFeatureBuilderBasic:
             ts = base + timedelta(minutes=5 * i)
             # Trending price with volume
             close = 45000.0 + i * 10.0
-            bars.append({
-                "ts": ts.isoformat().replace("+00:00", "Z"),
-                "open": close - 5,
-                "high": close + 10,
-                "low": close - 10,
-                "close": close,
-                "volume": 100.0 + i,
-            })
+            bars.append(
+                {
+                    "ts": ts.isoformat().replace("+00:00", "Z"),
+                    "open": close - 5,
+                    "high": close + 10,
+                    "low": close - 10,
+                    "close": close,
+                    "volume": 100.0 + i,
+                }
+            )
         bars_df = pd.DataFrame(bars)
 
         # Build features
@@ -102,14 +106,16 @@ class TestNaNWarmup:
         for i in range(50):
             ts = base + timedelta(minutes=5 * i)
             close = 45000.0 + i * 5.0
-            bars.append({
-                "ts": ts.isoformat().replace("+00:00", "Z"),
-                "open": close - 2,
-                "high": close + 5,
-                "low": close - 5,
-                "close": close,
-                "volume": 50.0 + i,
-            })
+            bars.append(
+                {
+                    "ts": ts.isoformat().replace("+00:00", "Z"),
+                    "open": close - 2,
+                    "high": close + 5,
+                    "low": close - 5,
+                    "close": close,
+                    "volume": 50.0 + i,
+                }
+            )
         bars_df = pd.DataFrame(bars)
 
         features = builder.build_features("BTC-USD", bars_df)
@@ -126,14 +132,16 @@ class TestNaNWarmup:
         for i in range(100):
             ts = base + timedelta(minutes=5 * i)
             close = 45000.0 + i * 5.0
-            bars.append({
-                "ts": ts.isoformat().replace("+00:00", "Z"),
-                "open": close - 2,
-                "high": close + 5,
-                "low": close - 5,
-                "close": close,
-                "volume": 50.0 + i,
-            })
+            bars.append(
+                {
+                    "ts": ts.isoformat().replace("+00:00", "Z"),
+                    "open": close - 2,
+                    "high": close + 5,
+                    "low": close - 5,
+                    "close": close,
+                    "volume": 50.0 + i,
+                }
+            )
         bars_df = pd.DataFrame(bars)
 
         features = builder.build_features("BTC-USD", bars_df)
@@ -158,14 +166,16 @@ class TestNoLookahead:
         prices = [45000.0, 45010.0, 45020.0, 45030.0, 45040.0]
         for i, price in enumerate(prices):
             ts = base + timedelta(minutes=5 * i)
-            bars.append({
-                "ts": ts.isoformat().replace("+00:00", "Z"),
-                "open": price - 5,
-                "high": price + 10,
-                "low": price - 10,
-                "close": price,
-                "volume": 100.0,
-            })
+            bars.append(
+                {
+                    "ts": ts.isoformat().replace("+00:00", "Z"),
+                    "open": price - 5,
+                    "high": price + 10,
+                    "low": price - 10,
+                    "close": price,
+                    "volume": 100.0,
+                }
+            )
         bars_df = pd.DataFrame(bars)
 
         features = builder.build_features("BTC-USD", bars_df)
@@ -189,14 +199,16 @@ class TestNoLookahead:
             ts = base + timedelta(minutes=5 * i)
             # Monotonically increasing prices
             close = 45000.0 + i * 10.0
-            bars.append({
-                "ts": ts.isoformat().replace("+00:00", "Z"),
-                "open": close - 2,
-                "high": close + 5,
-                "low": close - 5,
-                "close": close,
-                "volume": 50.0,
-            })
+            bars.append(
+                {
+                    "ts": ts.isoformat().replace("+00:00", "Z"),
+                    "open": close - 2,
+                    "high": close + 5,
+                    "low": close - 5,
+                    "close": close,
+                    "volume": 50.0,
+                }
+            )
         bars_df = pd.DataFrame(bars)
 
         features = builder.build_features("BTC-USD", bars_df)
@@ -231,14 +243,16 @@ class TestFundingZScore:
         for i in range(300):
             ts = base + timedelta(minutes=5 * i)
             close = 45000.0 + (i % 100) * 5.0  # Oscillate to avoid trend
-            bars.append({
-                "ts": ts.isoformat().replace("+00:00", "Z"),
-                "open": close - 2,
-                "high": close + 5,
-                "low": close - 5,
-                "close": close,
-                "volume": 50.0,
-            })
+            bars.append(
+                {
+                    "ts": ts.isoformat().replace("+00:00", "Z"),
+                    "open": close - 2,
+                    "high": close + 5,
+                    "low": close - 5,
+                    "close": close,
+                    "volume": 50.0,
+                }
+            )
         bars_df = pd.DataFrame(bars)
 
         # Funding rates: one every hour at specific times
@@ -248,10 +262,12 @@ class TestFundingZScore:
         funding = []
         for hour in range(25):
             ts = base + timedelta(minutes=60 * hour)
-            funding.append({
-                "ts": ts.isoformat().replace("+00:00", "Z"),
-                "funding_rate": 0.0001 + hour * 0.00005,
-            })
+            funding.append(
+                {
+                    "ts": ts.isoformat().replace("+00:00", "Z"),
+                    "funding_rate": 0.0001 + hour * 0.00005,
+                }
+            )
         funding_df = pd.DataFrame(funding)
 
         # Build features with funding
@@ -274,14 +290,16 @@ class TestFundingZScore:
         bars = []
         for i in range(50):
             ts = base + timedelta(minutes=5 * i)
-            bars.append({
-                "ts": ts.isoformat().replace("+00:00", "Z"),
-                "open": 45000.0,
-                "high": 45010.0,
-                "low": 44990.0,
-                "close": 45000.0 + i,
-                "volume": 50.0,
-            })
+            bars.append(
+                {
+                    "ts": ts.isoformat().replace("+00:00", "Z"),
+                    "open": 45000.0,
+                    "high": 45010.0,
+                    "low": 44990.0,
+                    "close": 45000.0 + i,
+                    "volume": 50.0,
+                }
+            )
         bars_df = pd.DataFrame(bars)
 
         # No funding data
@@ -303,14 +321,16 @@ class TestScaler:
         for i in range(100):
             ts = base + timedelta(minutes=5 * i)
             close = 45000.0 + i * 5.0
-            bars.append({
-                "ts": ts.isoformat().replace("+00:00", "Z"),
-                "open": close - 2,
-                "high": close + 5,
-                "low": close - 5,
-                "close": close,
-                "volume": 50.0 + i,
-            })
+            bars.append(
+                {
+                    "ts": ts.isoformat().replace("+00:00", "Z"),
+                    "open": close - 2,
+                    "high": close + 5,
+                    "low": close - 5,
+                    "close": close,
+                    "volume": 50.0 + i,
+                }
+            )
         bars_df = pd.DataFrame(bars)
 
         # Build features
@@ -338,7 +358,9 @@ class TestScaler:
                 # Note: sklearn may use slight variations in std computation
                 # So we just verify the scaler exists and is non-trivial
                 assert builder.scaler is not None
-                assert builder.scaler.mean_[feature_cols.index(col)] == pytest.approx(expected_mean, rel=1e-5)
+                assert builder.scaler.mean_[feature_cols.index(col)] == pytest.approx(
+                    expected_mean, rel=1e-5
+                )
 
         # Transform both train and test using the train-fit scaler
         scaled_train = builder.transform(train_features)
@@ -369,14 +391,16 @@ class TestTruncationInvariance:
         for i in range(100):
             ts = base + timedelta(minutes=5 * i)
             close = 45000.0 + i * 5.0  # Trending price
-            bars.append({
-                "ts": ts.isoformat().replace("+00:00", "Z"),
-                "open": close - 2,
-                "high": close + 5,
-                "low": close - 5,
-                "close": close,
-                "volume": 50.0 + i,
-            })
+            bars.append(
+                {
+                    "ts": ts.isoformat().replace("+00:00", "Z"),
+                    "open": close - 2,
+                    "high": close + 5,
+                    "low": close - 5,
+                    "close": close,
+                    "volume": 50.0 + i,
+                }
+            )
         bars_df = pd.DataFrame(bars)
 
         # Compute features on full dataset
@@ -387,7 +411,9 @@ class TestTruncationInvariance:
         for k in test_indices:
             builder_truncated = IntradayFeatureBuilder()
             bars_truncated = bars_df.iloc[: k + 1].copy()
-            features_truncated = builder_truncated.build_features("BTC-USD", bars_truncated)
+            features_truncated = builder_truncated.build_features(
+                "BTC-USD", bars_truncated
+            )
 
             # Assert that all feature columns at index k match between truncated and full
             feature_cols = [c for c in features_full.columns if c != "ts"]
@@ -400,8 +426,9 @@ class TestTruncationInvariance:
                     continue
 
                 # Otherwise, they should be float-equal (within tolerance)
-                assert np.isclose(val_full, val_trunc, atol=1e-9, equal_nan=True), \
+                assert np.isclose(val_full, val_trunc, atol=1e-9, equal_nan=True), (
                     f"Feature {col} at index {k} differs: full={val_full}, truncated={val_trunc}"
+                )
 
 
 class TestDatabaseFetch:
@@ -409,7 +436,6 @@ class TestDatabaseFetch:
 
     def test_fetch_bars_and_funding_empty_db(self, db_session: Session) -> None:
         """Test that fetch returns empty DataFrames when DB is empty."""
-        from stock_forecasting.intraday_features import fetch_bars_and_funding
 
         bars_df, funding_df = fetch_bars_and_funding(db_session, "BTC-USD", 365)
 
@@ -418,7 +444,6 @@ class TestDatabaseFetch:
 
     def test_fetch_bars_and_funding_with_data(self, db_session: Session) -> None:
         """Test fetching actual bars and funding from database."""
-        from stock_forecasting.intraday_features import fetch_bars_and_funding
 
         # Create ticker
         ticker = Ticker(
