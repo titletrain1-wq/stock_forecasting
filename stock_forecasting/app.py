@@ -124,7 +124,7 @@ def load_accuracy_records(
 
 
 def add_ticker(engine, symbol: str) -> None:
-    """Insert a new active equity ticker if it does not already exist."""
+    """Insert a new active ticker (equity or crypto) if it does not already exist."""
     sym = symbol.strip().upper()
     if not sym:
         return
@@ -132,14 +132,15 @@ def add_ticker(engine, symbol: str) -> None:
         existing = session.exec(select(Ticker).where(Ticker.symbol == sym)).first()
         if existing:
             return
+        is_crypto = sym.endswith("-USD")
         session.add(
             Ticker(
                 symbol=sym,
-                asset_class="equity",
+                asset_class="crypto" if is_crypto else "equity",
                 display_name=sym,
-                provider="yfinance",
+                provider="coinbase" if is_crypto else "yfinance",
                 provider_symbol=sym,
-                price_basis="adjusted",
+                price_basis="raw" if is_crypto else "adjusted",
                 added_at=datetime.now(UTC).isoformat(),
                 active=1,
             )

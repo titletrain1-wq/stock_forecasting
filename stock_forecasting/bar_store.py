@@ -111,6 +111,9 @@ class BarRepository:
             ).all()
             existing_map = {row.ts: row for row in existing_rows}
 
+            to_update = []
+            to_insert = []
+
             for bar in valid_bars:
                 if bar.ts in existing_map:
                     # Update existing record
@@ -123,7 +126,7 @@ class BarRepository:
                     existing.volume = bar.volume
                     existing.source = source
                     existing.ingested_at = now_str
-                    self.session.add(existing)
+                    to_update.append(existing)
                 else:
                     new_row = OhlcvBar(
                         ticker=ticker,
@@ -138,9 +141,15 @@ class BarRepository:
                         source=source,
                         ingested_at=now_str,
                     )
-                    self.session.add(new_row)
-                    existing_map[bar.ts] = new_row
+                    to_insert.append(new_row)
                     inserted_count += 1
+
+            # Batch add all updates
+            if to_update:
+                self.session.add_all(to_update)
+            # Batch add all new rows
+            if to_insert:
+                self.session.add_all(to_insert)
 
         self.session.commit()
         return inserted_count

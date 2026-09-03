@@ -48,6 +48,22 @@ def test_add_ticker_inserts_once(temp_db) -> None:
     assert [t.symbol for t in tickers] == ["AAPL"]
 
 
+def test_add_ticker_detects_crypto_and_equity(temp_db) -> None:
+    from stock_forecasting import app
+
+    app.add_ticker(temp_db, "SOL-USD")
+    app.add_ticker(temp_db, "AAPL")
+    tickers = {t.symbol: t for t in app.load_tickers(temp_db)}
+
+    assert tickers["SOL-USD"].asset_class == "crypto"
+    assert tickers["SOL-USD"].provider == "coinbase"
+    assert tickers["SOL-USD"].price_basis == "raw"
+
+    assert tickers["AAPL"].asset_class == "equity"
+    assert tickers["AAPL"].provider == "yfinance"
+    assert tickers["AAPL"].price_basis == "adjusted"
+
+
 def test_render_price_header_handles_empty_and_populated() -> None:
     from stock_forecasting import app
 
