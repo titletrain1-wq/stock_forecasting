@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+Chart technical indicators for on-demand analysis on the live price pane and
+dedicated sub-panes. All indicators are toggleable; defaults are on. Fixed a
+pre-existing cross-platform charset encoding bug that broke the v2.0.0 test
+suite on Windows.
+
+### Added
+
+- **Chart technical indicators (T-011).** Five new indicators on the price pane
+  (`SMA20`, `SMA50`, Bollinger Bands with 2σ envelope) and three sub-panes
+  (`RSI(14)`, `MACD(12,26,9)`, `Volume`). Built with `make_subplots`: price
+  pane 60% height, sub-panes ~13% each, all share the x-axis. Each indicator is
+  independently toggleable (default on). Integrates with existing daily/live
+  ribbon layers. `viz.add_technical_indicators()` entrypoint. 16 new tests added
+  to the suite.
+
+### Fixed
+
+- **Cross-platform charset encoding (T-011).** `viz.py` defined
+  `CI_DISCLAIMER` as a string literal with non-ASCII characters (©, ±), stored
+  with implicit Latin-1 encoding, but `KNOWN_LIMITATIONS.md` and other docs are
+  UTF-8. The v2.0.0 test suite passed on Unix (UTF-8 filesystem default) but
+  failed on Windows (Latin-1 default) with encoding mismatches during chart
+  render. Re-encoded the disclaimer and all string constants to UTF-8 explicitly.
+  Closes the T-010 Windows verification test failure. Test suite: 233 green.
+
 ## v2.0.0 — 2026-09-02
 
 Real-time-capable display layer. The daily ML pipeline
