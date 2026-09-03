@@ -1,6 +1,7 @@
 """Database session factory, engine creation, and table initialization."""
 
 import logging
+import re
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path
@@ -39,6 +40,38 @@ class _LibsqlConnProxy:
         pass
 
 
+_JWT_RE = re.compile(r"ey[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
+_DBURL_RE = re.compile(r"(?:libsql|wss?|https?)://[A-Za-z0-9._-]+(?::\d+)?")
+
+
+def _clean_token(raw: str) -> str:
+    """Extract the bare JWT from a possibly mis-pasted secret value.
+
+    Tolerates wrapped lines, surrounding quotes, and the whole TOML/env line
+    (``TURSO_AUTH_TOKEN = "eyJ..."``) being pasted in as the value - all of
+    which otherwise reach Turso as a malformed JWT or an invalid HTTP header.
+    """
+    squashed = "".join(raw.split())
+    match = _JWT_RE.search(squashed)
+    return match.group(0) if match else squashed.strip("\"'")
+
+
+def _clean_db_url(raw: str) -> str:
+    """Extract the bare database URL from a possibly mis-pasted secret value.
+
+    Returns a full ``libsql://<host>`` URL - ``libsql.connect()`` treats a bare
+    hostname as a LOCAL file path and silently never reaches Turso.
+    """
+    squashed = "".join(raw.split())
+    match = _DBURL_RE.search(squashed)
+    if match:
+        return match.group(0).rstrip("/")
+    host = squashed.strip("\"'").split("?", 1)[0].rstrip("/")
+    # Fall back to a bare host (possibly with the key name stripped off).
+    host = host.rsplit("=", 1)[-1].strip("\"'")
+    return host if "://" in host else f"libsql://{host}"
+
+
 def _make_turso_engine(raw_url: str, auth_token: str) -> Engine:
     """Build a SQLAlchemy Engine backed by a remote Turso/libSQL database.
 
@@ -49,15 +82,8 @@ def _make_turso_engine(raw_url: str, auth_token: str) -> Engine:
     """
     import libsql
 
-    # Strip ALL whitespace (not just ends): a secret pasted with a wrapped
-    # line leaves an internal newline in the token, which libsql then puts in
-    # an HTTP header -> "InvalidHeaderValue".
-    token = "".join(auth_token.split())
-    clean_url = "".join(raw_url.split())
-    # libsql.connect() wants the full "libsql://<host>" URL as `database`;
-    # a bare hostname is treated as a LOCAL file path and never reaches Turso.
-    stripped = clean_url.split("?", 1)[0].rstrip("/")
-    conn_url = stripped if "://" in stripped else f"libsql://{stripped}"
+    token = _clean_token(auth_token)
+    conn_url = _clean_db_url(raw_url)
 
     def _creator() -> object:
         return _LibsqlConnProxy(libsql.connect(conn_url, auth_token=token))
