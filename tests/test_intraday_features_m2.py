@@ -293,9 +293,9 @@ class TestScaler:
             )
         bars_df = pd.DataFrame(bars)
 
-        # Provide funding data to avoid all-NaN funding_zscore column
+        # Provide funding data for 15 days (matching 200 bars = ~16 hours, so days 0-2 at min, but use 15 for safety)
         funding = []
-        for day in range(3):
+        for day in range(15):
             ts = base + timedelta(days=day)
             funding.append(
                 {
