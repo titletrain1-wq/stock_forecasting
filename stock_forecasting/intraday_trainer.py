@@ -108,24 +108,24 @@ def backfill_intraday_bars(
 
             insert_sql = """
                 INSERT OR IGNORE INTO intraday_bars_history (ticker, interval, ts, open, high, low, close, volume, source, ingested_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (:ticker, :interval, :ts, :open, :high, :low, :close, :volume, :source, :ingested_at)
             """
             rows_to_insert = []
             for _, row in anchored_df.iterrows():
                 ts_str = row["ts"].isoformat().replace("+00:00", "Z")
                 rows_to_insert.append(
-                    (
-                        ticker_str,
-                        "5m",
-                        ts_str,
-                        float(row["o"]),
-                        float(row["h"]),
-                        float(row["l"]),
-                        float(row["c"]),
-                        float(row["v"]),
-                        "coinbase_rest",
-                        ingested_now,
-                    )
+                    {
+                        "ticker": ticker_str,
+                        "interval": "5m",
+                        "ts": ts_str,
+                        "open": float(row["o"]),
+                        "high": float(row["h"]),
+                        "low": float(row["l"]),
+                        "close": float(row["c"]),
+                        "volume": float(row["v"]),
+                        "source": "coinbase_rest",
+                        "ingested_at": ingested_now,
+                    }
                 )
 
             # Execute batch insert with INSERT OR IGNORE

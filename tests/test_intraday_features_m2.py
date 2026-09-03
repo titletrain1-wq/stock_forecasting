@@ -293,8 +293,20 @@ class TestScaler:
             )
         bars_df = pd.DataFrame(bars)
 
-        # Build features
-        features = builder.build_features("BTC-USD", bars_df)
+        # Provide funding data to avoid all-NaN funding_zscore column
+        funding = []
+        for day in range(3):
+            ts = base + timedelta(days=day)
+            funding.append(
+                {
+                    "ts": ts.isoformat().replace("+00:00", "Z"),
+                    "funding_rate": 0.0001 + day * 0.00001,
+                }
+            )
+        funding_df = pd.DataFrame(funding)
+
+        # Build features with funding
+        features = builder.build_features("BTC-USD", bars_df, funding_df)
 
         # Split into TRAIN (bars 50-150, after warmup) and TEST (bars 150-200)
         train_features = features.iloc[50:150]
