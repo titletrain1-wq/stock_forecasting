@@ -375,18 +375,26 @@ class WorkerScheduler:
                             ticker.symbol,
                             bar_count,
                         )
-                        result = ingestion_service.backfill(ticker.symbol, years=2)
-                        new_bars = bar_repo.get_range(
-                            ticker.symbol, "0000", "9999", interval="1d"
-                        )
-                        new_count = len(new_bars) if new_bars else 0
-                        logger.info(
-                            "Auto-backfill %s: %d -> %d bars (%s)",
-                            ticker.symbol,
-                            bar_count,
-                            new_count,
-                            result,
-                        )
+                        try:
+                            result = ingestion_service.backfill(ticker.symbol, years=2)
+                            session.commit()
+                            new_bars = bar_repo.get_range(
+                                ticker.symbol, "0000", "9999", interval="1d"
+                            )
+                            new_count = len(new_bars) if new_bars else 0
+                            logger.info(
+                                "Auto-backfill %s: %d -> %d bars (%s)",
+                                ticker.symbol,
+                                bar_count,
+                                new_count,
+                                result,
+                            )
+                        except Exception:
+                            session.rollback()
+                            logger.exception(
+                                "Auto-backfill %s failed - training on what exists",
+                                ticker.symbol,
+                            )
 
                     for horizon in horizons:
                         for model_type in model_types:

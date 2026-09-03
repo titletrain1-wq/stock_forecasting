@@ -111,14 +111,18 @@ def run_backfill(years: int = 2) -> None:
             t.symbol
             for t in session.exec(select(Ticker).where(Ticker.active == 1)).all()
         ]
-        svc = IngestionService(session, scheduler.providers)
         for sym in symbols:
-            try:
-                res = svc.backfill(sym, years=years)
-                logger.info("backfill %s -> %s", sym, res)
-            except Exception:
-                logger.exception("backfill %s failed", sym)
-        session.commit()
+            # Fresh session per ticker: a failure on one must not poison the
+            # rest (SQLAlchemy leaves the session in a rolled-back state).
+            with Session(scheduler.engine) as tsession:
+                svc = IngestionService(tsession, scheduler.providers)
+                try:
+                    res = svc.backfill(sym, years=years)
+                    tsession.commit()
+                    logger.info("backfill %s -> %s", sym, res)
+                except Exception:
+                    tsession.rollback()
+                    logger.exception("backfill %s failed", sym)
 
     for name, fn in (
         ("job_retrain_nightly", scheduler.job_retrain_nightly),

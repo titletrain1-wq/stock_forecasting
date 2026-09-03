@@ -4,6 +4,7 @@ import json
 from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime
 
+from sqlalchemy import text
 from sqlmodel import Session, select
 
 from stock_forecasting.providers.base import Bar
@@ -101,55 +102,56 @@ class BarRepository:
                 valid_bars.append(bar)
 
         if valid_bars:
+            # Count how many are genuinely new (for the return value / logging).
+            # The write below is idempotent regardless, so a stale read here is
+            # harmless.
             timestamps = [b.ts for b in valid_bars]
-            existing_rows = self.session.exec(
-                select(OhlcvBar).where(
-                    OhlcvBar.ticker == ticker,
-                    OhlcvBar.interval == interval,
-                    OhlcvBar.ts.in_(timestamps),
-                )
-            ).all()
-            existing_map = {row.ts: row for row in existing_rows}
-
-            to_update = []
-            to_insert = []
-
-            for bar in valid_bars:
-                if bar.ts in existing_map:
-                    # Update existing record
-                    existing = existing_map[bar.ts]
-                    existing.open = bar.open
-                    existing.high = bar.high
-                    existing.low = bar.low
-                    existing.close = bar.close
-                    existing.adj_close = bar.adj_close
-                    existing.volume = bar.volume
-                    existing.source = source
-                    existing.ingested_at = now_str
-                    to_update.append(existing)
-                else:
-                    new_row = OhlcvBar(
-                        ticker=ticker,
-                        interval=interval,
-                        ts=bar.ts,
-                        open=bar.open,
-                        high=bar.high,
-                        low=bar.low,
-                        close=bar.close,
-                        adj_close=bar.adj_close,
-                        volume=bar.volume,
-                        source=source,
-                        ingested_at=now_str,
+            existing_ts = set(
+                self.session.exec(
+                    select(OhlcvBar.ts).where(
+                        OhlcvBar.ticker == ticker,
+                        OhlcvBar.interval == interval,
+                        OhlcvBar.ts.in_(timestamps),
                     )
-                    to_insert.append(new_row)
-                    inserted_count += 1
+                ).all()
+            )
+            inserted_count = sum(1 for b in valid_bars if b.ts not in existing_ts)
 
-            # Batch add all updates
-            if to_update:
-                self.session.add_all(to_update)
-            # Batch add all new rows
-            if to_insert:
-                self.session.add_all(to_insert)
+            # Single idempotent upsert for the whole batch. INSERT .. ON CONFLICT
+            # avoids the read-then-write race and the RETURNING-based batch
+            # insert path, which libSQL/Turso rejects on a duplicate and which
+            # then poisons the session for every later ticker.
+            params = [
+                {
+                    "ticker": ticker,
+                    "interval": interval,
+                    "ts": b.ts,
+                    "open": b.open,
+                    "high": b.high,
+                    "low": b.low,
+                    "close": b.close,
+                    "adj_close": b.adj_close,
+                    "volume": b.volume,
+                    "source": source,
+                    "ingested_at": now_str,
+                }
+                for b in valid_bars
+            ]
+            self.session.connection().execute(
+                text(
+                    "INSERT INTO ohlcv_bars "
+                    "(ticker, interval, ts, open, high, low, close, adj_close, "
+                    " volume, source, ingested_at) "
+                    "VALUES (:ticker, :interval, :ts, :open, :high, :low, :close, "
+                    " :adj_close, :volume, :source, :ingested_at) "
+                    "ON CONFLICT(ticker, interval, ts) DO UPDATE SET "
+                    " open=excluded.open, high=excluded.high, low=excluded.low, "
+                    " close=excluded.close, adj_close=excluded.adj_close, "
+                    " volume=excluded.volume, source=excluded.source, "
+                    " ingested_at=excluded.ingested_at"
+                ),
+                params,
+            )
 
         self.session.commit()
         return inserted_count
