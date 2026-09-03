@@ -15,12 +15,12 @@ This design introduces **intraday forecasting models with full scorecard** to `s
 - v2.0.0 delivers real-time crypto price display via Coinbase WebSocket.
 - Intraday bars are already flowing into `intraday_bars` (100-row cache).
 - dYdX hourly funding rate is already integrated as a feature; it aligns perfectly with crypto 1-hour model cadence.
-- Equities 1-hour horizon sidesteps the yfinance 15-minute delay (by anchoring to the last closed bar and accepting the lag) and works within the 60-day lookback ceiling (270+ samples).
+- Equities 1-hour horizon is now viable: yfinance 1h bars extend back ~730 days (~5,070 samples), providing adequate statistical depth. yfinance 15m/5m/1m remain limited to 60d—live display only, no model training.
 - A separate short-horizon intraday model with grading unlocks actionable directional/volatility signals and a live accuracy panel without compromising the frozen, proven daily ML core.
 
 ### Key constraints
-1. **Asset-class specific**: Crypto (BTC-USD, ETH-USD) at 15m/1h/4h; Equities (AAPL, NVDA, SPY) at 1h only. Equity 15-minute data and sub-1h forecasting remain out-of-scope due to yfinance's 60-day cap and 15-min delay (Kevin's scout, §2.2).
-2. **Per-asset-class data windows**: Crypto: 365-day lookback (Coinbase REST, unlimited depth). Equities: 60-calendar-day lookback ceiling (yfinance, hard limit §1.2).
+1. **Asset-class specific**: Crypto (BTC-USD, ETH-USD) at 15m/1h/4h; Equities (AAPL, NVDA, SPY) at 1h only. Equity 15-minute data and sub-1h forecasting remain out-of-scope due to yfinance's sub-1h cap at 60d and 15-min delivery delay (Kevin's scout, §2.2).
+2. **Per-asset-class data windows**: Crypto: 365-day lookback (Coinbase REST, unlimited depth). Equities: 730-calendar-day lookback (yfinance, proven via probe—1h bars only; sub-1h limited to 60d).
 3. **Full scorecard**: Intraday forecasts are persisted, graded when targets mature, and displayed in an intraday accuracy panel (separate from daily accuracy).
 4. **ML-core frozen**: The daily forecaster, trainer, features, evaluator, accuracy pipeline remain untouched. Intraday uses separate tables, modules, jobs. No cross-contamination.
 5. **No real-time model updates**: Intraday model retrains nightly, once, like the daily model — not streaming or tick-driven.
@@ -38,8 +38,8 @@ This design introduces **intraday forecasting models with full scorecard** to `s
 
 **Equities (yfinance):**
 - **Asset coverage**: AAPL, NVDA, SPY intraday price forecasting on 1-hour horizon ONLY.
-- **Data sources**: yfinance REST (1h bars, hard ceiling ~60 calendar days); no sub-1h horizons.
-- **Lookback window**: ~60 calendar days (yfinance hard limit §1.2). Approximately 270 hourly bars per ticker.
+- **Data sources**: yfinance REST (1h bars, ~730 calendar days available); sub-1h (15m/5m/1m) capped at 60d—display-only, no model training.
+- **Lookback window**: ~730 calendar days. Approximately 5,070 hourly bars per ticker (adequate for LightGBM, ~same depth as crypto 365d sample count).
 
 **Unified across both asset classes:**
 - **Model class**: LightGBM (primary) or Ridge regression (fallback) on tabular rolling features.
@@ -54,7 +54,7 @@ This design introduces **intraday forecasting models with full scorecard** to `s
 
 ### 1.2 Explicitly OUT-of-scope this milestone
 
-- **Equities sub-1h** (1m / 5m / 15m): Equity intraday data on yfinance is hard-capped at 60 days, and sub-1h predictions suffer from yfinance's ~15-minute delay (predicting the next 5m with data that is already 15m stale). Unviable without paid real-time feeds. Equities 1h is IN scope (Kevin's scout, §2.2).
+- **Equities sub-1h** (1m / 5m / 15m): Equity sub-1h data on yfinance is hard-capped at 60 calendar days, and sub-1h predictions suffer from yfinance's ~15-minute delivery delay (predicting the next 5m with data that is already 15m stale). These sub-1h bars are available for **display only** (live price ribbon), never for model training. Equities 1h is IN scope (730d available per Dwight's probe). (Kevin's scout, §2.2).
 - **Crypto sub-15m** (1m / 5m next-bar): Microstructure noise dominates; SNR too low for actionable 1m/5m forecasts (Kevin's scout, §2.1).
 - **Real-time model retraining**: Intraday model is trained once per day; not adapted intraday based on live ticks.
 - **Intraday position-sizing / trade signals / alerts**: Forecasts and accuracy panel are informational only; no prescriptive advice or notifications.
@@ -67,11 +67,11 @@ This design introduces **intraday forecasting models with full scorecard** to `s
 
 These decisions are immutable for this design and must be carried verbatim into implementation:
 
-1. **SCOPE (EXPANDED)**: 
+1. **SCOPE (EXPANDED, REVISION 3)**: 
    - **Crypto**: BTC-USD + ETH-USD on **15m, 1h, and 4h horizons** (was 1h/4h; 15m added).
-   - **Equities**: AAPL, NVDA, SPY on **1h horizon ONLY** (newly added; no sub-1h due to yfinance 15m delay + 60d cap).
+   - **Equities**: AAPL, NVDA, SPY on **1h horizon ONLY** (newly added; sub-1h display-only, no model training due to yfinance 60d cap on sub-1h).
    - **Model count**: Crypto = 6 directional models (BTC/ETH × 15m/1h/4h) + 2 HAR-RV (per ticker). Equities = 3 directional models (1h) + 3 HAR-RV (per ticker). **Total: 9 directional + 5 HAR-RV models**.
-   - **Data windows**: Crypto 365d (god's F3 ruling, Coinbase REST unlimited depth). Equities ~60d (yfinance hard ceiling, ~270 1h bars per ticker).
+   - **Data windows**: Crypto 365d (Coinbase REST unlimited depth). Equities 730d (yfinance proven via probe; ~5,070 1h bars per ticker, adequate LightGBM depth).
 
 2. **FULL SCORECARD**: The intraday forecast is persisted and graded. Separate `intraday_prediction_snapshots` table, separate intraday evaluator job (grades when target matures), separate intraday accuracy panel. Completely independent of the daily `prediction_snapshots` ledger and daily accuracy panel.
 
@@ -100,14 +100,17 @@ These decisions are immutable for this design and must be carried verbatim into 
 
 7. **Immutable training/grading store (F2)**: New table `intraday_bars_history` (immutable, written once per closed bar, pruned per asset-class window). Both training and grading read from it. This resolves the 7-day prune conflict.
 
-8. **Per-asset-class lookback windows (REVISION 2)**:
+8. **Per-asset-class lookback windows (REVISION 3: R-A)**:
    - **Crypto (BTC-USD, ETH-USD)**: 365 calendar days. Config: `INTRADAY_LOOKBACK_DAYS_CRYPTO=365`.
-   - **Equities (AAPL, NVDA, SPY)**: ~60 calendar days (yfinance hard limit). Config: `INTRADAY_LOOKBACK_DAYS_EQUITY=60`.
-   - Schema: `intraday_bars_history` adds `asset_class` column (`crypto` | `equity`) for partitioning retention.
+   - **Equities (AAPL, NVDA, SPY)**: 730 calendar days (yfinance proven via Dwight's probe—1h bars back to ~2023-10-06, ~5,070 bars/ticker). Config: `INTRADAY_LOOKBACK_DAYS_EQUITY=730`.
+   - **Note**: yfinance sub-1h (15m/5m/1m) remain capped at 60d, used for display only (live ribbon), never for model training.
+   - Schema: `intraday_bars_history` adds `asset_class` column (`crypto` | `equity`) for per-asset retention config.
 
-9. **15-minute crypto horizon (REVISION 2)**: Adds 2 new models (BTC-15m, ETH-15m) to the crypto suite. 15m bars are sourced from Coinbase 5m granularity (resample or anchor to 15m boundaries). Model is 15-step-forward log-return (= 15 × 5m bars). Same feature suite as 1h (VWAP, funding-rate, etc.), fit on 365d Coinbase history. Rationale: Sub-1h crypto can work on Coinbase (0s latency, unlimited depth); microstructure SNR acceptable at 15m with dYdX funding feature (captures volatility regime). 15m is a tactical sub-1h window for fast traders; 1h/4h remain strategic.
+8b. **Equity model setup (REVISION 3: R-B)** — Equities with ~5,000 bars (730d) are NOT sample-starved. Use the SAME model architecture as crypto: **LightGBM primary + Ridge fallback, standard leakage canary** (no special-casing for small sample). With 5k bars, equity sample depth is comparable to crypto 365d count and adequate for LightGBM. Removes the prior experimental flags / shallow-tree mitigation (they were predicated on 270 samples, now false).
 
-10. **Equity anchor handling (REVISION 2)**: yfinance introduces ~15-minute delivery lag. Intraday forecasts for equities are ANCHORED TO THE LAST CLOSED 1h BAR (not live price). This means a forecast made at 14:45 ET uses the 14:00 ET close (which is ~15m stale on yfinance). The forecast is for the NEXT 1h bar (15:00 ET close). Acceptance: Equity 1h forecast is inherently lagged by ~15m vs. real-time tick; this is a design tradeoff for using free yfinance data. Disclaimer clarifies this (§7, §F10).
+9. **15-minute crypto horizon (REVISION 2)**: Adds 2 new models (BTC-15m, ETH-15m) to the crypto suite. 15m bars are sourced from Coinbase 5m granularity (anchor to 15m boundaries: :00, :15, :30, :45 UTC). Model is 3-step-forward log-return (= 3 × 5m bars = 15m horizon). Same feature suite as 1h (VWAP, funding-rate, etc.), fit on 365d Coinbase history. Labels anchor at contiguous non-overlapping 15m boundaries. Rationale: Sub-1h crypto can work on Coinbase (0s latency, unlimited depth); microstructure SNR acceptable at 15m with dYdX funding feature (captures volatility regime). 15m is a tactical sub-1h window for fast traders; 1h/4h remain strategic.
+
+10. **Equity anchor handling (REVISION 2)**: yfinance introduces ~15-minute delivery lag. Intraday forecasts for equities are ANCHORED TO THE LAST CLOSED 1h BAR (not live price). This means a forecast made at 14:45 ET uses the 14:00 ET close (which is ~15m stale on yfinance). The forecast is for the NEXT 1h bar (15:00 ET close). Acceptance: Equity 1h forecast is inherently lagged by ~15m vs. real-time tick; this is a design tradeoff for using free yfinance data. Disclaimer clarifies this (§7, §2.5 (F1)0).
 
 11. **Feature applicability by asset class (REVISION 2)**:
     - **Crypto**: All 8 features (§4.1): VWAP dist, vol ratios, EWMA spreads, funding-rate z-score, volume accel, lagged returns, hour-of-day, day-of-week.
@@ -130,7 +133,7 @@ Daily ML Core (FROZEN)               Intraday ML Subsystem (NEW, Full Scorecard,
 Reads from (CRYPTO):                Intraday reads from:
 └─ ohlcv_bars (1d, immutable)      Crypto:
                                     ├─ intraday_bars (1m/5m candles, 7-day cache)
-                                    ├─ intraday_bars_history (365-day ML store, §F2)
+                                    ├─ intraday_bars_history (365-day ML store, §2.5 (F2))
                                     ├─ live_quotes (current tick)
                                     └─ crypto_derivatives (dYdX funding rate)
                                     
@@ -155,8 +158,8 @@ Zero shared tables between daily and intraday. Separate display panels. Asset-cl
 
 **EQUITIES Input source**: yfinance 1h bars for AAPL, NVDA, SPY from `intraday_bars_history`.
 - **Granularity**: 1-hour bars (fixed; yfinance 1h resolution).
-- **Lookback window**: ~60 calendar days (yfinance hard limit §1.2). Yields ~270 hourly bars per ticker (42 trading sessions × 6.5 hrs/session). Regression risk: sample size at lower end of LightGBM feasibility (~270 vs. 5k target); mitigate via shallow trees (depth 3–4) and Ridge fallback.
-- **Note**: yfinance introduces ~15-minute delivery lag; forecast anchors account for this (§2.5 R2#10).
+- **Lookback window**: 730 calendar days (yfinance capacity proven via probe; earliest ~2023-10-06). Yields ~5,070 hourly bars per ticker (adequate LightGBM depth, same architecture as crypto—no special-casing).
+- **Note**: yfinance introduces ~15-minute delivery lag; forecast anchors account for this (§2.5 R2#10). Equity bar closes are typically outside trading hours (overnight/weekend handling required §3.2.1).
 
 **Feature computation** (§4 below):
 1. Build OHLCV-derived technical features (VWAP, realized vol, EWMA spreads).
@@ -165,7 +168,7 @@ Zero shared tables between daily and intraday. Separate display panels. Asset-cl
 4. **Equities only**: Omit funding-rate feature.
 5. Merge into a single DataFrame for each (BTC-USD, ETH-USD, AAPL, NVDA, SPY) pair.
 
-**Label construction** (k-step forward log-return, §F8):
+**Label construction** (k-step forward log-return, §2.5 (F8)):
 - **Crypto**: Anchor ONLY at closed bar boundaries: :00 UTC for 1h; :00/:04/:08/:12/:16/:20 UTC for 4h; :00/:15/:30/:45 UTC for 15m (or equivalently, anchor_ts must be a multiple of 900, 3600, or 15*60 seconds).
   - Label = $\ln(P_{anchor+k} / P_{anchor})$ where k ∈ {900s, 3600s, 14400s} and both anchors are closed bars from `intraday_bars_history`.
 - **Equities**: Anchor at 1h closed bar boundaries (e.g., 10:00 ET, 11:00 ET, etc.).
@@ -176,6 +179,18 @@ Zero shared tables between daily and intraday. Separate display panels. Asset-cl
   - Purging: Drop all training samples whose label window overlaps with the test window.
   - Embargoing: Drop training samples immediately following the test set by 24 hours to eliminate serial correlation leakage (§4.5 risk mitigation).
 - **Rationale**: k-step forward returns on overlapping bars share price data; naive K-fold leaks future information across folds.
+
+### 3.2.1 Equity Market-Calendar Handling (B7)
+
+**Problem**: Equities trade only during market hours (09:30–16:00 ET = 14:30–21:00 UTC) on trading days (Mon–Fri, excluding holidays). A 1h label "anchor +1h" is ambiguous if the anchor is at 15:30 ET (market close) — the "+1h" would be 16:30 ET the next morning, not same-day. Overnight gaps and weekends must be explicit in the training data.
+
+**Solution**:
+- **Label anchors**: Equity 1h bar anchors are TRADING-HOUR closed bars only (10:00 ET, 11:00 ET, ..., 16:00 ET). No off-market anchors.
+- **Labels**: Label = ln(P_{anchor+1h,next_trading_bar} / P_anchor), where "next_trading_bar" is the next 1h bar that closes on the same trading day (not the literal +3600s timestamp).
+  - Example: If anchor = 15:00 ET (3-hour close), label targets 16:00 ET (4-hour close), same day.
+  - If anchor = 16:00 ET (market close), label targets 10:00 ET next trading day (overnight gap is implicit in the close prices).
+- **Market calendar gating**: Equity forecast-writer job (M4, §5.1) fires ONLY during trading hours (14:30–21:00 UTC) and on trading days. Reference `stock_forecasting/market_calendar.py` for trading-day validation and holiday skipping.
+- **HAR-RV caveat**: Heterogeneous Autoregressive volatility model for equities is computed on trading-hour bars only. Overnight gaps (16:00 ET close to 09:30 ET open) are implicit in the daily realized volatility bucket; no explicit interpolation or zero-filling across overnight intervals. This means equity HAR-RV bands may widen after weekends (due to overnight drift) but is a natural feature of the gap-aware data.
 
 ### 3.3 Retrain cadence & schedule (Crypto + Equities)
 
@@ -214,10 +229,10 @@ Immutable, durable store for intraday bars (separate from `intraday_bars`, the 7
 | `source` | TEXT | `coinbase_rest` \| `coinbase_ws_finalized` (crypto); `yfinance` (equity) |
 | `ingested_at` | TEXT | wall-clock |
 
-**Unique index**: `(asset_class, ticker, interval, ts)` (REVISION 2: asset_class added).  
-**Retention**: 
-- **Crypto**: Pruned at 365 days. Daily job: `DELETE FROM intraday_bars_history WHERE asset_class='crypto' AND ts < now - 365 days`.
-- **Equities**: Pruned at 60 days. Daily job: `DELETE FROM intraday_bars_history WHERE asset_class='equity' AND ts < now - 60 days`.
+**Unique index**: `(asset_class, ticker, interval, ts)` (asset_class added for retention partitioning).  
+**Retention** (per-asset config, not hardcoded): 
+- **Crypto**: Pruned at INTRADAY_LOOKBACK_DAYS_CRYPTO (365 days). Daily job: `DELETE FROM intraday_bars_history WHERE asset_class='crypto' AND ts < now - 365 days`.
+- **Equities**: Pruned at INTRADAY_LOOKBACK_DAYS_EQUITY (730 days). Daily job: `DELETE FROM intraday_bars_history WHERE asset_class='equity' AND ts < now - 730 days`.
 
 **Writing**: 
 - **Crypto**: Worker closes intraday bar from `intraday_bars` (display cache), writes once to `intraday_bars_history` with `asset_class='crypto'` and `is_provisional=0` (immutable), then propagates to `intraday_bars` (7-day cache). Single-writer pattern (v2).
@@ -236,11 +251,11 @@ Mirrors the structure of `prediction_snapshots` (daily) but for intraday horizon
 | `asset_class` | TEXT | `crypto` \| `equity` (REVISION 2: for analytics/filtering) |
 | `horizon` | TEXT | `15m` \| `1h` \| `4h` (crypto: all three; equity: 1h only) |
 | `made_at` | TEXT | wall-clock UTC when forecast was written by worker job |
-| `anchor_ts` | TEXT | timestamp of the CLOSED bar used to compute features (§F8) |
+| `anchor_ts` | TEXT | timestamp of the CLOSED bar used to compute features (§2.5 (F8)) |
 | `anchor_price` | REAL | close price of the closed anchor bar |
 | `predicted_return` | REAL | model's log-return forecast (ŷ), where label = ln(P_{anchor+h} / P_anchor) |
 | `predicted_price` | REAL | anchor_price × exp(predicted_return) [denormalized for display] |
-| `ci_lower_return` | REAL | HAR-RV lower bound (log-return space, fitted on train split §F4) |
+| `ci_lower_return` | REAL | HAR-RV lower bound (log-return space, fitted on train split §2.5 (F4)) |
 | `ci_upper_return` | REAL | HAR-RV upper bound (log-return space) |
 | `ci_lower_price` | REAL | denormalized to price space |
 | `ci_upper_price` | REAL | denormalized to price space |
@@ -248,9 +263,9 @@ Mirrors the structure of `prediction_snapshots` (daily) but for intraday horizon
 | `model_version` | TEXT | version string of model used |
 | `model_sha` | TEXT | git SHA of model training code |
 
-**Index**: `UNIQUE(ticker, horizon, anchor_ts)` + `INSERT OR IGNORE` dedup (§F1).  
+**Index**: `UNIQUE(ticker, horizon, anchor_ts)` + `INSERT OR IGNORE` dedup (§2.5 (F1)).  
 **Retention**: Keep intraday predictions indefinitely (full audit trail); no pruning.  
-**Grading reference**: When `target_ts` passes, `intraday_evaluator` looks up this row and computes realized return from `intraday_bars_history` (§F2).
+**Grading reference**: When `target_ts` passes, `intraday_evaluator` looks up this row and computes realized return from `intraday_bars_history` (§2.5 (F2)).
 
 ### 3.7 New table — `intraday_accuracy_records` (REVISION 2: asset_class tracking)
 
@@ -264,7 +279,7 @@ Records grading results once a forecast's target matures. Same shape as `accurac
 | `asset_class` | TEXT | `crypto` \| `equity` (REVISION 2: for analytics/filtering) |
 | `horizon` | TEXT | `15m` \| `1h` \| `4h` (crypto: all three; equity: 1h only) |
 | `graded_at` | TEXT | wall-clock when grade was computed |
-| `realized_return` | REAL | actual log-return from anchor to target close (closed bar from intraday_bars_history, §F2) |
+| `realized_return` | REAL | actual log-return from anchor to target close (closed bar from intraday_bars_history, §2.5 (F2)) |
 | `realized_price` | REAL | actual close price at target_ts from intraday_bars_history |
 | `signed_error` | REAL | realized_return - predicted_return |
 | `abs_error_pct` | REAL | \|signed_error\| × 100 |
@@ -307,7 +322,7 @@ The following features are designed to capture short-horizon volatility clusters
    - Raw price dynamics at multiple scales; non-zero autocorrelation at horizon.
 
 #### Derivatives (external, dYdX) — Crypto ONLY (equities omit this feature)
-6. **dYdX Funding-Rate Z-Score** (24h window, §F9) — **CRYPTO ONLY**:
+6. **dYdX Funding-Rate Z-Score** (24h window, §2.5 (F9)) — **CRYPTO ONLY**:
    - $f = (\text{FundingRate}_t - \text{mean}_{[t-24\text{h}, t]}) / \text{std}_{[t-24\text{h}, t]}$
    - Extreme funding rates predict volatility expansion or liquidation cascades.
    - Sourced from `crypto_derivatives` table (hourly snapshots).
@@ -344,24 +359,30 @@ Recommend **Option A** (new unified module with asset-class dispatch functions) 
 
 ## 5. Intraday Worker Jobs (Forecast Writer & Evaluator)
 
-### 5.1 Forecast writer job (hourly, sole writer, §F1)
+### 5.1 Forecast writer job (hourly, sole writer, asset-aware, §2.5 (F1))
 
-**When**: Hourly APScheduler job, aligned to bar close (e.g., top of each hour UTC). Computes both 1h and 4h forecasts in a single run.
+**When (CRYPTO)**: Hourly APScheduler job @00:00 UTC (post-day close). Computes 15m, 1h, and 4h forecasts in a single run.
+
+**When (EQUITY)**: Hourly APScheduler job on trading days only, with market-hours gating. Fires at US market hours (09:30–16:00 ET = 14:30–21:00 UTC) to forecast the next 1h bar. References `stock_forecasting/market_calendar.py` to skip weekends + holidays. Computes 1h forecast only.
 
 **What it does**:
-1. Query `intraday_bars_history` for the last CLOSED bar (anchor bar) for each (ticker, interval).
-   - Anchor_ts must be on a closed-bar boundary (:00 for 1h; :00/:04/:08/:12/:16/:20 UTC for 4h).
-2. Load the fitted intraday_forecaster model (LightGBM or Ridge, per god's Q2).
-3. Compute features for this anchor bar (VWAP, vol ratios, EWMA spreads, dYdX funding-rate as-of value, temporal).
+1. Query `intraday_bars_history` (asset_class-aware) for the last CLOSED bar (anchor bar) for each (ticker, interval).
+   - **Crypto**: Anchor_ts must be on a closed-bar boundary (:00/:15/:30/:45 UTC for 15m; :00 UTC for 1h; :00/:04/:08/:12/:16/:20 UTC for 4h).
+   - **Equity**: Anchor_ts must be a closed 1h bar on a trading day (e.g., 10:00 ET, 11:00 ET, ..., 16:00 ET). Use market_calendar to validate.
+2. Load the fitted intraday_forecaster model (LightGBM or Ridge, per god's R-B: same setup for both assets).
+3. Compute features for this anchor bar:
+   - **Crypto**: VWAP dist, vol ratios, EWMA spreads, dYdX funding-rate as-of value (critical: as-of, no lookahead), temporal.
+   - **Equity**: VWAP dist, vol ratios, EWMA spreads, temporal (no funding-rate; crypto-only feature).
 4. Call model.predict() → predicted_return.
-5. Call intraday_volatility (HAR-RV) → CI bounds (fitted on TRAIN split, per §F4).
-6. **Write to `intraday_prediction_snapshots`**:
+5. Call intraday_volatility (HAR-RV) → CI bounds (fitted on TRAIN split, per §2.5 (F4)).
+6. **Write to `intraday_prediction_snapshots`** (with asset_class field):
    - Anchor: anchor_ts (closed bar), anchor_price (its close).
-   - Target: anchor_ts + 1h (or +4h for 4h horizon).
-   - Predicted return, CI bounds, model version/SHA, made_at = now.
+   - **Crypto**: Target: anchor_ts + 15m / 1h / 4h (per horizon).
+   - **Equity**: Target: anchor_ts + 1h.
+   - Predicted return, CI bounds, model version/SHA, made_at = now, asset_class = 'crypto' | 'equity'.
 7. **Dedup via `INSERT OR IGNORE`**: `UNIQUE(ticker, horizon, anchor_ts)` ensures no duplicate for the same anchor.
 
-**Concurrency**: Single writer (v2 pattern). No in-render DB writes (contrast with F1's anti-pattern).
+**Concurrency**: Single writer per asset class (v2 pattern). No in-render DB writes (contrast with F1's anti-pattern). Crypto and equity workers can run in parallel (independent).
 
 ### 5.2 Grading workflow (separate worker job)
 
@@ -387,20 +408,19 @@ Recommend **Option A** (new unified module with asset-class dispatch functions) 
 
 ## 6. Model Training & Inference
 
-### 6.1 Model architecture (per locked decision §2)
+### 6.1 Model architecture (per locked decision §2, REVISION 3: R-B same setup both assets)
 
-**Primary**: LightGBM regressor.
-- **Target**: k-step log-return ($r_{t, t+k}$ where $k \in \{1, 4\}$ hours).
-- **Hyperparameters** (to be proposed in implementation):
-  - Depth: shallow trees (3–5) to avoid overfitting on 5-min bar noise.
+**Primary**: LightGBM regressor (same for crypto and equities, §R-B).
+- **Target**: k-step log-return ($r_{t, t+k}$ where $k \in \{15\text{m}, 1\text{h}, 4\text{h}\}$ for crypto; $k = 1\text{h}$ for equity).
+- **Hyperparameters** (same template, tuned per asset-class):
+  - Depth: 3–5 (balanced against noise; no special shallow-tree requirement for equity post-R-B / 730d sample increase).
   - Learning rate: 0.01–0.05 (conservative, stable gradients).
   - Number of boosting rounds: 100–500 (early stopping on validation loss).
   - **OPEN QUESTION**: Should hyperparameters be tuned via cross-validation or fixed empirically? Recommend Bayesian optimization on the Purged & Embargoed split for MVP (tuning on test data would leak).
 
-**Fallback**: Ridge regression.
-- Same features, continuous target.
-- Alpha (regularization): determined via cross-validation on training set.
-- Use Ridge if LightGBM overfits or retrains become too slow.
+**Fallback**: Ridge regression (same for both assets, §R-B).
+- Same features, continuous target, standard cross-validated alpha.
+- Train both LGB + Ridge nightly; display uses LGB if available, Ridge as fallback.
 
 **Volatility bands (HAR-RV)** (separate from directional forecast):
 - Predict next 1-hour / 4-hour realized volatility using Heterogeneous Autoregressive (HAR) model.
@@ -410,13 +430,13 @@ Recommend **Option A** (new unified module with asset-class dispatch functions) 
 
 ### 6.2 Training loop (nightly, post-close, REVISION 2: dual-asset)
 
-**Pseudocode** (§F3/R2#8: crypto 365d / equity 60d; §F4: HAR-RV fit on TRAIN; §F8: closed-bar anchors only):
+**Pseudocode** (§2.5 (F3)/R2#8: crypto 365d / equity 60d; §2.5 (F4): HAR-RV fit on TRAIN; §2.5 (F8): closed-bar anchors only):
 
 **CRYPTO LOOP**:
 ```
 1. Fetch latest 365 days of BTC-USD + ETH-USD intraday bars from intraday_bars_history (5m, asset_class='crypto').
 2. Fetch latest 365 days of dYdX funding-rate snapshots.
-3. Align + resample to common 5m grid; as-of join funding rates (§F9).
+3. Align + resample to common 5m grid; as-of join funding rates (§2.5 (F9)).
 4. For each horizon in {15m, 1h, 4h}:
    a. Filter to closed-bar anchors only (:00/:15/:30/:45 for 15m; :00 for 1h; :00/:04/:08/:12/:16/:20 UTC for 4h).
    b. Compute features (§4.1, crypto suite with funding-rate) on the closed-bar-anchored DataFrame.
@@ -428,33 +448,33 @@ Recommend **Option A** (new unified module with asset-class dispatch functions) 
       iv. Train on remaining samples.
    e. For each (ticker, horizon) pair:
       i. Fit LightGBM on train; validate on (purged + embargoed) test.
-      ii. **Leakage canary** (§F7): Fit a control model with shuffled labels on the same split; verify it scores ~50% directional on test (not >55%), confirming no label leakage.
+      ii. **Leakage canary** (§2.5 (F7)): Fit a control model with shuffled labels on the same split; verify it scores ~50% directional on test (not >55%), confirming no label leakage.
       iii. Record validation metrics on test: MAE (%), RMSE, directional accuracy (%), CI coverage (%).
       iv. Fit Ridge as fallback.
       v. Save both models to disk (pickle files, per god's ruling Q2).
-   f. **Fit HAR-RV on TRAIN split** (§F4): Volatility model trained on train split, evaluated on test for CI coverage.
+   f. **Fit HAR-RV on TRAIN split** (§2.5 (F4)): Volatility model trained on train split, evaluated on test for CI coverage.
 5. Record metadata (train_start, train_end, model version, code SHA, validation MAE/directional/CI-cover) for audit.
 6. Exit crypto loop.
 ```
 
-**EQUITY LOOP**:
+**EQUITY LOOP** (REVISION 3: R-A 730d, R-B standard LGB depth):
 ```
-1. Fetch latest 60 days of AAPL, NVDA, SPY intraday bars from intraday_bars_history (1h, asset_class='equity').
+1. Fetch latest 730 days of AAPL, NVDA, SPY intraday bars from intraday_bars_history (1h, asset_class='equity').
 2. For horizon 1h only:
-   a. Filter to closed 1h bar anchors (e.g., 10:00 ET, 11:00 ET, ..., 16:00 ET).
+   a. Filter to closed 1h bar anchors on trading days (e.g., 10:00 ET, 11:00 ET, ..., 16:00 ET; skip weekends/holidays via market_calendar).
    b. Compute features (§4.1, equity suite WITHOUT funding-rate) on the closed-bar-anchored DataFrame.
-   c. Construct 1-step log-return labels: label = ln(P_{anchor+1h} / P_anchor).
+   c. Construct 1-step log-return labels: label = ln(P_{anchor+1h} / P_anchor). Labels are contiguous non-overlapping; purge drops only boundary samples.
    d. Split into train/test using Purged & Embargoed TimeSeriesSplit:
-      i. Test window: last 7 days (1 week).
-      ii. Purge & embargo same as crypto.
-      iii. Train on remaining samples (~50 days, ~300 bars if lucky; at lower end of LightGBM feasibility).
+      i. Test window: last 30 days (1 month, ~125 trading bars).
+      ii. Purge & embargo same as crypto (24h embargo).
+      iii. Train on remaining samples (~700 trading days, ~3,500 bars; adequate LightGBM depth per §R-B).
    e. For each ticker (AAPL, NVDA, SPY):
-      i. Fit LightGBM on train (with shallow trees: depth 3–4) to mitigate overfitting on small sample.
-      ii. **Leakage canary** (§F7): Fit control model with shuffled labels; verify ~50% directional.
+      i. Fit LightGBM on train (standard depth 3–5, same as crypto; no special shallow-tree mitigation per §R-B).
+      ii. **Leakage canary** (§2.5 (F7)): Fit control model with shuffled labels; verify ~50% directional.
       iii. Record validation metrics.
-      iv. Fit Ridge as fallback (often outperforms LGB on small samples).
+      iv. Fit Ridge as fallback.
       v. Save both models to disk.
-   f. **Fit HAR-RV on TRAIN split** (§F4): Volatility model per ticker.
+   f. **Fit HAR-RV on TRAIN split** (§2.5 (F4), caveat: overnight gaps): Volatility model per ticker. HAR features computed on trading hours only; overnight gaps are implicit in the daily/hourly/5m aggregation (no explicit filling).
 3. Record metadata (train_start, train_end, model version, code SHA, validation MAE/directional/CI-cover) for audit.
 4. Exit equity loop.
 ```
@@ -465,7 +485,7 @@ Recommend **Option A** (new unified module with asset-class dispatch functions) 
 - Both can run in parallel (no sequential dependency).
 - Total duration: ~3–4 min combined.
 
-### 6.3 Inference (display-time, read-only, §F1)
+### 6.3 Inference (display-time, read-only, §2.5 (F1))
 
 **When the chart renders** (every 2 seconds for crypto, per v2 design):
 1. Load the latest intraday_forecaster model (checkpoint from nightly train).
@@ -491,13 +511,13 @@ Recommend **Option A** (new unified module with asset-class dispatch functions) 
 
 The intraday forecast is rendered as an additional series on the existing live price chart:
 
-- **Series**: `intraday_forecast_1h` and `intraday_forecast_4h` (one per horizon).
+- **Series**: `intraday_forecast_15m`, `intraday_forecast_1h`, `intraday_forecast_4h` (crypto 15m/1h/4h; equity 1h).
 - **Style**: 
-  - Line: distinct color (e.g., orange for 1h, purple for 4h), light α (0.6).
+  - Line: distinct colors (e.g., tomato for 15m, orange for 1h, purple for 4h), light α (0.6).
   - Bands: filled area between `lower_bound` and `upper_bound` at the same α (visual uncertainty ribbon).
-  - Hover text: "1h intraday forecast | ±95% CI | HAR-RV realized-vol bands".
-- **Anchor**: All ribbons start from the current live price (`live_quotes.price`), not from `ohlcv_bars.close` (unlike the daily ribbon, which anchors to P_close).
-  - **Rationale**: Intraday is a separate short-horizon model; anchoring to the live price allows the user to see the model's next-1h expectation relative to "now".
+  - Hover text: "[horizon] intraday forecast | ±95% CI | HAR-RV realized-vol bands".
+- **Anchor**: All ribbons anchor to the **last closed bar** (not live price). Forecast visualizes the model's expected return FROM that closed-bar close TO the target bar's close.
+  - **Rationale**: Intraday forecast is a separate short-horizon model trained on closed-bar returns; anchoring to the closed bar (fixed reference) ensures the ribbon doesn't drift as live price ticks intraday. This is consistent with §2.5 (F1)0, §6.3 (read-only display), and §2.5 R2#10 (equity delay handling).
 
 ### 7.2 Historical forecast markers (on-chart grading feedback)
 
@@ -510,13 +530,13 @@ For intraday predictions that have been graded (matured + evaluated), render his
   - **Grey**: grading_attempts=0 or grading_attempts>0 but still ungraded (bar not yet available; prediction still pending).
 - **Position**: Markers appear at the target bar's timestamp and price (realized_price).
 - **Hover text**: "Forecast [made_at]: predicted $X±CI, realized $Y, error ±Z%, hit: [yes/no]".
-- **Retention**: Keep historical markers for the past 7 days (matching intraday_bars retention). Older graded forecasts can be archived or hidden.
+- **Retention**: Keep historical markers visible for the past 7 days on display (independent of storage retention, which extends 365d crypto / 730d equity for accuracy stats). Older graded forecasts remain in the database for audit but can be hidden or archived from the live chart.
 
 ### 7.3 Intraday accuracy panel (separate section in UI)
 
 A new accuracy panel, analogous to the daily accuracy panel (panels.accuracy_rows + panels.verdict_sentence) but sourced from `intraday_accuracy_records`:
 
-- **Per-horizon rollup** (1h and 4h separately):
+- **Per-asset, per-horizon rollup** (crypto: 15m, 1h, 4h; equity: 1h):
   - **N graded**: count of forecasts with grading_attempts > 0 and all fields filled.
   - **MAE %**: mean(abs_error_pct) for graded forecasts.
   - **Direction %**: 100 × sum(direction_hit) / count, or "N/A" if N < 10.
@@ -532,8 +552,8 @@ A new accuracy panel, analogous to the daily accuracy panel (panels.accuracy_row
 
 ### 7.4 Toggle & config
 
-- **Display flag** in `.env`: `INTRADAY_FORECAST_DISPLAY=true` (default: true if LightGBM models are found on disk).
-- **Per-asset toggle** in UI (optional for MVP): Show/hide `intraday_forecast_1h` and `intraday_forecast_4h` independently.
+- **Display flags** in `.env` (asset-aware): `INTRADAY_FORECAST_ENABLED_CRYPTO=true`, `INTRADAY_FORECAST_ENABLED_EQUITY=true` (default: true if models are found on disk).
+- **Per-asset, per-horizon toggle** in UI (optional for MVP): Show/hide `intraday_forecast_15m`, `intraday_forecast_1h`, `intraday_forecast_4h` independently (crypto and equity 1h can be shown separately).
 - **OPEN QUESTION**: Should the user be able to choose confidence level (e.g., 68%, 95%)? Recommend fixed 95% for consistency with daily bands; make tunable in future.
 
 ### 7.5 EOD reconciliation
@@ -571,9 +591,9 @@ At session close (crypto 00:00 UTC):
 
 ### 8.2 Documentation placeholder
 
-**Disclaimer** (to appear in chart caption + `KNOWN_LIMITATIONS.md`, §F10):
+**Disclaimer** (to appear in chart caption + `KNOWN_LIMITATIONS.md`):
 
-> *"Intraday forecasts (1-hour and 4-hour horizons) are short-term technical and derivatives-based predictions, independent from daily ML evaluation. Forecasts are anchored to the last closed bar, NOT to the live price (which drifts intraday). Intraday forecasts have their own accuracy scorecard (historical markers + accuracy panel), separate from daily predictions. Confidence bands are empirical (HAR-RV realized volatility, fitted on training data). Use intraday forecasts for tactical context; rely on daily forecast ribbon for strategic directional signals."*
+> *"Intraday forecasts (crypto: 15m/1h/4h; equities: 1h) are short-term technical and derivatives-based predictions, independent from daily ML evaluation. Crypto uses dYdX funding-rate z-scores; equities omit this feature (crypto-only). Forecasts are anchored to the last closed bar, NOT to the live price (which drifts intraday). Equities inherit ~15-minute yfinance delivery lag; forecast uses the latest available closed bar. Intraday forecasts have their own accuracy scorecard (historical markers + accuracy panel), separate from daily predictions. Confidence bands are empirical (HAR-RV realized volatility, fitted on training data). Use intraday forecasts for tactical context; rely on daily forecast ribbon for strategic directional signals."*
 
 ---
 
@@ -582,26 +602,24 @@ At session close (crypto 00:00 UTC):
 ### 9.1 New environment variables
 
 ```
-# Intraday forecasting feature flags (asset-aware)
+# Intraday forecasting feature flags (asset-aware, REVISION 3: R-A 730d equity)
 INTRADAY_FORECAST_ENABLED_CRYPTO=true
 INTRADAY_FORECAST_ENABLED_EQUITY=true
 INTRADAY_FORECAST_HORIZONS_CRYPTO=15m,1h,4h  # crypto horizons (comma-separated)
-INTRADAY_FORECAST_HORIZONS_EQUITY=1h          # equity horizons (1h only, yfinance limit)
+INTRADAY_FORECAST_HORIZONS_EQUITY=1h          # equity horizons (1h only; sub-1h display-only)
 INTRADAY_LOOKBACK_DAYS_CRYPTO=365             # crypto training window (god's F3 ruling)
-INTRADAY_LOOKBACK_DAYS_EQUITY=60              # equity training window (yfinance ceiling, §1.2)
+INTRADAY_LOOKBACK_DAYS_EQUITY=730             # equity training window (R-A: yfinance proven ~730d for 1h bars, ~5,070 samples)
 INTRADAY_BARS_HISTORY_RETENTION_DAYS_CRYPTO=365
-INTRADAY_BARS_HISTORY_RETENTION_DAYS_EQUITY=60  # per-asset-class retention (R2#8)
-INTRADAY_RETRAIN_SCHEDULE_CRYPTO=nightly
-INTRADAY_RETRAIN_SCHEDULE_EQUITY=nightly_postclose  # 21:00 UTC post-US-close
-INTRADAY_FORECAST_WRITER_INTERVAL_SECONDS_CRYPTO=3600  # 00:00 UTC for crypto
-INTRADAY_FORECAST_WRITER_INTERVAL_SECONDS_EQUITY=3600  # 21:00 UTC for equity
+INTRADAY_BARS_HISTORY_RETENTION_DAYS_EQUITY=730  # per-asset-class retention (R-A: config, not hardcoded)
+INTRADAY_RETRAIN_HOUR_UTC_CRYPTO=0            # Crypto retrain @00:00 UTC (post-day, cron-style hour int)
+INTRADAY_RETRAIN_HOUR_UTC_EQUITY=21           # Equity retrain @21:00 UTC (post-16:00 ET close, cron-style hour int)
 
-# Model hyperparameters (tuned per asset-class, §R2#9)
+# Model hyperparameters (tuned per asset-class, §R-B: same LightGBM depth for both)
 INTRADAY_LIGHTGBM_DEPTH_CRYPTO=4
-INTRADAY_LIGHTGBM_DEPTH_EQUITY=3              # shallower for small sample (equity 270 bars)
+INTRADAY_LIGHTGBM_DEPTH_EQUITY=4              # same as crypto; 730d equity sample (~5k bars) is adequate (R-B)
 INTRADAY_LIGHTGBM_LR=0.02                     # same for both
 INTRADAY_LIGHTGBM_ROUNDS_CRYPTO=300
-INTRADAY_LIGHTGBM_ROUNDS_EQUITY=150           # fewer rounds for equity, more conservative
+INTRADAY_LIGHTGBM_ROUNDS_EQUITY=300           # standard, same as crypto (R-B: no special conservative tuning)
 
 # Display (asset-aware)
 INTRADAY_FORECAST_OPACITY=0.6
@@ -611,7 +629,7 @@ INTRADAY_FORECAST_COLOR_4H=#9932CC            # purple (crypto 4h)
 INTRADAY_CI_LEVEL=0.95                        # 95% bands (both assets)
 ```
 
-**Cold-start note** (§F6): Accuracy panel shows "warming up" and markers are grey for the first ~1–2 weeks post-launch while graded history accumulates. This is expected; accuracy metrics become stable after N>=10 graded forecasts (per asset-class, per horizon).
+**Cold-start note** (§2.5 (F6)): Accuracy panel shows "warming up" and markers are grey for the first ~1–2 weeks post-launch while graded history accumulates. This is expected; accuracy metrics become stable after N>=10 graded forecasts (per asset-class, per horizon).
 
 ### 9.2 Model storage (REVISION 2: asset-class partitioned)
 
@@ -640,8 +658,8 @@ INTRADAY_CI_LEVEL=0.95                        # 95% bands (both assets)
   - (9 files total for equity)
   
   **Shared**:
-  - `metadata_crypto.json` — timestamp, train range (crypto), validation metrics per horizon, code SHA.
-  - `metadata_equity.json` — timestamp, train range (equity, 60d), validation metrics, code SHA.
+  - `metadata_crypto.json` — timestamp, train range (crypto, 365d), validation metrics per horizon, code SHA.
+  - `metadata_equity.json` — timestamp, train range (equity, 730d per R-A), validation metrics, code SHA.
 
 - **Initialization**: If no model files exist, display is disabled until nightly retrain completes (crypto @00:00, equity @21:00).
 
@@ -649,17 +667,17 @@ INTRADAY_CI_LEVEL=0.95                        # 95% bands (both assets)
 
 ## 10. Implementation Plan (Milestones + DoD, REVISION 2: dual-asset)
 
-**Dependency order**: M0 → M1 → M2 → M3 → M4 → M5 → M6 → M7 (reordered per §F7: evaluator before markers).
+**Dependency order**: M0 → M1 → M2 → M3 → M4 → M5 → M6 → M7 (reordered per §2.5 (F7): evaluator before markers).
 
 | M | Deliverable | Definition of Done | Real Failure Criteria |
 |---|---|---|---|
-| **M0** | Schema + config (§F2, R2#8) | New tables: `intraday_bars_history` (365d crypto + 60d equity, §3.5) + `intraday_prediction_snapshots` (with asset_class, §3.6) + `intraday_accuracy_records` (with asset_class, §3.7) in `schema.py`. Add `asset_class` columns to all three. Config: `INTRADAY_LOOKBACK_DAYS_CRYPTO=365`, `INTRADAY_LOOKBACK_DAYS_EQUITY=60`, worker + evaluator job intervals. `.env.example` updated. Tests: tables exist with asset_class, settings parse, model directories exist, retention triggers per asset-class. | Missing asset_class columns; retention hardcoded to 365d (not per-asset); equity config missing. |
-| **M1** | Intraday data pipeline (crypto + equity) | **Crypto**: `intraday_trainer.py` fetches 365d Coinbase bars + dYdX funding from `intraday_bars_history` (asset_class='crypto'). **Equity**: Fetches 60d yfinance 1h bars from `intraday_bars_history` (asset_class='equity'). As-of join funding for crypto (§F9). Aligns crypto to 5m, equity to 1h; filters to closed-bar anchors. Tests: mock Coinbase + yfinance → shapes correct, funding no lookahead, anchor filtering works, equity data ingested. | Missing equity path; funding forward-filled; non-closed-bar anchors; yfinance backfill job absent. |
+| **M0** | Schema + config (§2.5 (F2), R-A) | New tables: `intraday_bars_history` (365d crypto + 730d equity per R-A, §3.5) + `intraday_prediction_snapshots` (with asset_class, §3.6) + `intraday_accuracy_records` (with asset_class, §3.7) in `schema.py`. Add `asset_class` columns to all three. Config: `INTRADAY_LOOKBACK_DAYS_CRYPTO=365`, `INTRADAY_LOOKBACK_DAYS_EQUITY=730` (per R-A), `INTRADAY_RETRAIN_HOUR_UTC_CRYPTO=0`, `INTRADAY_RETRAIN_HOUR_UTC_EQUITY=21` (cron-style hour ints, per B5). `.env.example` updated. Tests: tables exist with asset_class, settings parse per asset-class, model directories exist, retention triggers per config. | Missing asset_class columns; retention hardcoded (not per-asset); equity lookback wrong; hour-format config wrong. |
+| **M1** | Intraday data pipeline (crypto + equity) | **Crypto**: `intraday_trainer.py` fetches 365d Coinbase bars + dYdX funding from `intraday_bars_history` (asset_class='crypto'). **Equity**: Fetches 730d yfinance 1h bars from `intraday_bars_history` (asset_class='equity', R-A). As-of join funding for crypto (§2.5 (F9)). Aligns crypto to 5m, equity to 1h; filters to closed-bar anchors (trading-hours gating for equity). Tests: mock Coinbase + yfinance → shapes correct, funding no lookahead, anchor filtering works, equity data ~5k bars verified. | Missing equity path; funding forward-filled; non-closed-bar anchors; yfinance backfill job absent. |
 | **M2** | Feature engineering (crypto + equity) | `intraday_features.py` computes §4.1 suite with asset-class dispatch: crypto all 8 features (including funding-rate), equity 7 (omit funding-rate). StandardScaler fit on train window per asset-class. Tests: crypto features include funding, equity omits it, shapes match, no NaNs after warmup, scaling on train only. | Missing equity branch; funding present in equity features; scaling on test data. |
-| **M3** | Model training (LightGBM + fallback, §F4, R2#9) | `intraday_trainer.py`: closed-bar-anchor labels per horizon (15m/1h/4h crypto, 1h equity). Purged & Embargoed split. **Leakage canary DoD**: control model scores ~50% directional, not >55%. **Crypto**: 6 directional models (BTC/ETH × 15m/1h/4h) + 2 HAR-RV. **Equity**: 3 directional (AAPL/NVDA/SPY × 1h) + 3 HAR-RV with shallow trees (depth 3–4) for small sample robustness. Validation metrics per model. Tests: split logic verified, canary passes per asset-class, metrics logged, model count correct. | Missing 15m crypto or equity models; HAR-RV fit on test; shallow trees not used for equity; no asset-class separation. |
-| **M4** | Forecast writer worker job (§F1, R2#9) | `intraday_forecaster.py` + APScheduler job (crypto hourly @00:00 UTC, equity hourly @21:00 UTC). Loads models by (ticker, horizon, asset_class). Computes forecast for anchor=last closed bar. Writes to `intraday_prediction_snapshots` (with asset_class) via `INSERT OR IGNORE` dedup. Tests: crypto worker fires @00:00, equity @21:00, anchor is closed bar, dedup works, no race, asset_class populated. | Fragment writes DB (F1 anti-pattern); forming bar used as anchor; missing equity writer job; asset_class not set. |
+| **M3** | Model training (LightGBM + fallback, R-B) | `intraday_trainer.py`: closed-bar-anchor labels per horizon (15m/1h/4h crypto, 1h equity, non-overlapping). Purged & Embargoed split (24h embargo). **Leakage canary DoD**: control model scores ~50% directional, not >55%. **Crypto**: 6 directional models (BTC/ETH × 15m/1h/4h) + 2 HAR-RV. **Equity**: 3 directional (AAPL/NVDA/SPY × 1h) + 3 HAR-RV (R-B: standard depth 4, same as crypto; 730d sample ~5k bars, adequate). Market-hours gating on equity anchors (trading days only). Validation metrics per model. Tests: split logic verified, canary passes per asset-class, metrics logged, model count correct. | Missing 15m crypto or equity models; HAR-RV fit on test; equity depth/hyperparameters wrong (R-B); no market-calendar gating. |
+| **M4** | Forecast writer worker job (§2.5 (F1), R-B) | `intraday_forecaster.py` + APScheduler jobs (crypto @00:00 UTC; equity trading-hours @14:30–21:00 UTC via market_calendar, per B7). Loads models by (ticker, horizon, asset_class). Computes forecast for anchor=last closed bar (crypto all 3 horizons, equity 1h). Writes to `intraday_prediction_snapshots` (with asset_class) via `INSERT OR IGNORE` dedup. Features: crypto all 8 (incl. funding), equity 7 (no funding). Tests: crypto worker fires @00:00, equity fires on trading days during market hours, anchor is closed bar, dedup works, no race, asset_class populated, features correct. | Fragment writes DB (F1 anti-pattern); forming bar used as anchor; missing equity market-hours gating; asset_class not set; features wrong per asset. |
 | **M5** | Intraday evaluator job (R2#10) | `intraday_evaluator.py` + APScheduler job (hourly). Queries `intraday_bars_history` (asset_class-aware) for realized closed bar. If not found/provisional, increments `grading_attempts`, defers. If found, computes error/direction/CI, writes to `intraday_accuracy_records` (with asset_class). Handles equity yfinance delay (~15m) gracefully. Tests: crypto mature bar → grading succeeds, equity yfinance lag accounted for, ungraded bar → counter increments, asset_class populated. | Missing evaluator; reads from 7d cache (per F2); asset_class not tracked; equity delay not handled. |
-| **M6** | Display integration (chart + markers, §F7, R2) | `viz.py` renders intraday ribbons (crypto 15m/1h/4h, equity 1h). Fragment reads last forecast from `intraday_prediction_snapshots` (read-only, asset_class-aware). Markers read from `intraday_accuracy_records`. EOD reconciliation writes crypto to `intraday_bars_history`. Tests: crypto + equity ribbons render without crash, ribbon points align, bands monotonic, markers (green/red/grey) render post-M5, daily ribbon unaffected, asset-class filter works. | M5 not yet implemented; fragment writes to DB; markers fail to render; equity display missing. |
+| **M6** | Display integration (chart + markers, §2.5 (F7), R2) | `viz.py` renders intraday ribbons (crypto 15m/1h/4h, equity 1h). Fragment reads last forecast from `intraday_prediction_snapshots` (read-only, asset_class-aware). Markers read from `intraday_accuracy_records`. EOD reconciliation writes crypto to `intraday_bars_history`. Tests: crypto + equity ribbons render without crash, ribbon points align, bands monotonic, markers (green/red/grey) render post-M5, daily ribbon unaffected, asset-class filter works. | M5 not yet implemented; fragment writes to DB; markers fail to render; equity display missing. |
 | **M7** | Intraday accuracy panel (R2) | `panels.py`: intraday_accuracy_rows + verdict_sentence. Per-asset-class, per-horizon rollup (crypto: 15m/1h/4h; equity: 1h). Metrics: MAE%, direction%, CI cover%, n, trust verdict. Separate tabs or sections per asset-class (not merged with daily or cross-asset). Cold-start state: "warming up" + grey markers for ~1–2 weeks. Tests: panel renders per asset-class, metrics computed separately, verdict thresholds applied, cold-start UI correct, daily panel unaffected. | Missing panel; merged with daily/cross-asset; no asset-class separation; cold-start missing. |
 
 ---
@@ -688,7 +706,7 @@ INTRADAY_CI_LEVEL=0.95                        # 95% bands (both assets)
 
 8. **Trust verdict thresholds**: MAE %, direction %, CI cover % levels for "high/moderate/low trust", tuned per asset-class? (Crypto: larger sample, tighter thresholds; equity: looser given small sample.) Recommend starting from similar forecasting systems (e.g., crypto MAE < 2% = high; equity MAE < 3% = high) and refining post-launch.
 
-9. **Cold-start marker color**: Grey for ungraded? Or a different color to distinguish "pending" vs "permanently ungraded"? Recommend grey (pending), with a tooltip explaining "will update when target matures" (§F6).
+9. **Cold-start marker color**: Grey for ungraded? Or a different color to distinguish "pending" vs "permanently ungraded"? Recommend grey (pending), with a tooltip explaining "will update when target matures" (§2.5 (F6)).
 
 10. **15m crypto forecast use case**: Who uses 15m forecasts? (Day traders? Scalpers? Just to have granularity?) Recommend treating 15m as experimental alpha; monitor adoption and feedback. Consider removing if cold storage of 15m records balloons DB size.
 
@@ -698,18 +716,18 @@ INTRADAY_CI_LEVEL=0.95                        # 95% bands (both assets)
 
 - ✅ **Alignment with locked decisions + god's rulings**: All four user-locked decisions (scope, full scorecard, ML-core frozen, model choice) carried in §2. God's GATE 0 rulings (365d lookback, pickle storage, per-asset models, grading source/cadence) baked into §2.5 and §10 milestones.
 - ✅ **Jim's findings incorporated** (F1–F12):
-  - F1 ✅: Forecast writer moved OUT of fragment → dedicated hourly APScheduler worker job (§5.1). Fragment read-only (§6.3). Dedup via INSERT OR IGNORE (§F1).
-  - F2 ✅: New immutable table `intraday_bars_history` (365d ML store). Training + grading both read from it, never 7-day cache (§3.5, §F2).
-  - F3 ✅: 365d training window (god ruling), not 90d (§3.2, §F3).
-  - F4 ✅: HAR-RV fit on TRAIN split, not test. Metrics: MAE/RMSE/directional/CI-cover, not Sharpe (§6.2, §F4).
-  - F5 ✅: Request math corrected (~351 requests/ticker for 365d, not bars; §9.1, §F5).
-  - F6 ✅: Cold-start documented (panel "warming up" for ~1–2 weeks, §9.1, §F6).
+  - F1 ✅: Forecast writer moved OUT of fragment → dedicated hourly APScheduler worker job (§5.1). Fragment read-only (§6.3). Dedup via INSERT OR IGNORE (§2.5 (F1)).
+  - F2 ✅: New immutable table `intraday_bars_history` (365d ML store). Training + grading both read from it, never 7-day cache (§3.5, §2.5 (F2)).
+  - F3 ✅: 365d training window (god ruling), not 90d (§3.2, §2.5 (F3)).
+  - F4 ✅: HAR-RV fit on TRAIN split, not test. Metrics: MAE/RMSE/directional/CI-cover, not Sharpe (§6.2, §2.5 (F4)).
+  - F5 ✅: Request math corrected (~351 requests/ticker for 365d, not bars; §9.1, §2.5 (F5)).
+  - F6 ✅: Cold-start documented (panel "warming up" for ~1–2 weeks, §9.1, §2.5 (F6)).
   - F7 ✅: Milestone order fixed: M5 (evaluator) before M6 (markers). Real failure criteria in DoD column, not tautologies. Leakage canary in M3 DoD.
-  - F8 ✅: Label construction fixed: anchor ONLY at closed bar boundaries, label = ln(P_{anchor+k} / P_anchor) (§3.2, §F8).
-  - F9 ✅: Funding-rate as-of join (no forward-fill lookahead) documented (§4.1, §F9).
-  - F10 ✅: Forecast anchor is closed bar, not live price. Disclaimer clarified (§7 intro, §F10).
-  - F11 ✅: Contradiction resolved via intraday_bars_history (F2). LOOKBACK_DAYS=365 consistent (§9.1, §F11).
-  - F12 ✅: Q1/Q2/Q7/Q9/Q10 closed (god's rulings). Q3-Q8 + Q12-13 remain genuinely deferred (§11, §F12).
+  - F8 ✅: Label construction fixed: anchor ONLY at closed bar boundaries, label = ln(P_{anchor+k} / P_anchor) (§3.2, §2.5 (F8)).
+  - F9 ✅: Funding-rate as-of join (no forward-fill lookahead) documented (§4.1, §2.5 (F9)).
+  - F10 ✅: Forecast anchor is closed bar, not live price. Disclaimer clarified (§7 intro, §2.5 (F1)0).
+  - F11 ✅: Contradiction resolved via intraday_bars_history (F2). LOOKBACK_DAYS=365 consistent (§9.1, §2.5 (F1)1).
+  - F12 ✅: Q1/Q2/Q7/Q9/Q10 closed (god's rulings). Q3-Q8 + Q12-13 remain genuinely deferred (§11, §2.5 (F1)2).
 - ✅ **Existing code seams referenced**: `intraday_bars` (7d display cache), `intraday_bars_history` (365d ML store), `live_quotes`, `crypto_derivatives`, `viz.py`, `schema.py`.
 - ✅ **No ambiguity on key design forks**:
   - Daily ML core is FROZEN, zero cross-contamination.
