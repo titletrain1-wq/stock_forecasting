@@ -27,6 +27,7 @@ from stock_forecasting.schema import (
     AccuracyRecord,
     OhlcvBar,
     PredictionSnapshot,
+    SystemHeartbeat,
     Ticker,
 )
 from stock_forecasting.viz import (
@@ -373,6 +374,19 @@ def main() -> None:
     st.title("Stock Forecast View")
     for warn in st.session_state.get("_bootstrap_warnings", []):
         st.caption(f"startup warning - {warn}")
+
+    with st.expander("diagnostics", expanded=not tickers):
+        s = get_settings()
+        turso = bool(s.turso_database_url and s.turso_database_url.strip())
+        st.write(f"DB target: **{'Turso (remote)' if turso else 'local sqlite'}**")
+        st.write(f"TURSO_DATABASE_URL set: {turso}")
+        try:
+            with Session(engine) as _s:
+                nb = _s.exec(select(OhlcvBar)).all()
+                nh = _s.exec(select(SystemHeartbeat)).all()
+            st.write(f"ohlcv_bars rows: {len(nb)}  ·  system_heartbeat rows: {len(nh)}")
+        except Exception as exc:  # noqa: BLE001
+            st.write(f"count query failed: {exc}")
     if not tickers:
         st.info("Add a ticker in the sidebar to get started.")
         return
