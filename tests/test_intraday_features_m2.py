@@ -294,8 +294,8 @@ class TestFundingZScore:
 class TestScaler:
     """Test StandardScaler fit/transform."""
 
-    def test_scaler_fit_and_transform(self) -> None:
-        """Test that scaler fit on training data normalizes correctly."""
+    def test_scaler_fit_and_transform_train_only(self) -> None:
+        """Test that scaler fit on TRAIN slice only; assert test data does not leak into fit."""
         builder = IntradayFeatureBuilder()
 
         base = datetime(2026, 9, 1, 0, 0, 0, tzinfo=UTC)
@@ -316,27 +316,92 @@ class TestScaler:
         # Build features
         features = builder.build_features("BTC-USD", bars_df)
 
-        # Fit scaler on full data
-        builder.fit_scaler(features)
+        # Split into TRAIN (first 70) and TEST (last 30)
+        train_features = features.iloc[:70]
+        test_features = features.iloc[70:]
 
-        # Transform
-        scaled = builder.transform(features)
+        # Fit scaler on TRAIN slice ONLY
+        builder.fit_scaler(train_features)
 
-        # Verify shape preserved
-        assert scaled.shape == features.shape
+        # Verify scaler's statistics come from TRAIN data, not TEST
+        # (Scaler should have learned only from train_features)
+        feature_cols = [c for c in train_features.columns if c != "ts"]
 
-        # Verify ts column unchanged
-        assert all(scaled["ts"] == features["ts"])
-
-        # Verify features are scaled (mean ~0, std ~1) for non-NaN values
-        feature_cols = [c for c in scaled.columns if c != "ts"]
         for col in feature_cols:
-            non_nan_scaled = scaled[col].dropna()
-            non_nan_orig = features[col].dropna()
-            if len(non_nan_scaled) > 1 and len(non_nan_orig) > 1:
-                # Scaled features should have standardized values
-                # Mean close to 0 and std close to 1 for scaled data
-                assert abs(non_nan_scaled.mean()) < 2.0  # Lenient check for scaled data
+            train_col = train_features[col].dropna()
+            if len(train_col) > 1:
+                # Manually compute what the scaler should have learned
+                expected_mean = train_col.mean()
+                expected_std = train_col.std()
+
+                # Verify against what scaler learned (within tolerance)
+                # Note: sklearn may use slight variations in std computation
+                # So we just verify the scaler exists and is non-trivial
+                assert builder.scaler is not None
+                assert builder.scaler.mean_[feature_cols.index(col)] == pytest.approx(expected_mean, rel=1e-5)
+
+        # Transform both train and test using the train-fit scaler
+        scaled_train = builder.transform(train_features)
+        scaled_test = builder.transform(test_features)
+
+        # Verify shapes preserved
+        assert scaled_train.shape == train_features.shape
+        assert scaled_test.shape == test_features.shape
+
+        # Verify ts columns unchanged
+        assert all(scaled_train["ts"] == train_features["ts"])
+        assert all(scaled_test["ts"] == test_features["ts"])
+
+
+class TestTruncationInvariance:
+    """Test that features computed on truncated vs full data match (no lookahead)."""
+
+    def test_truncation_invariance_all_features(self) -> None:
+        """Test that features at position k are identical whether computed on bars[:k] or bars[:n].
+
+        This validates that no future data influences feature values (no lookahead).
+        """
+        builder = IntradayFeatureBuilder()
+
+        # Create 100 bars of synthetic data
+        base = datetime(2026, 9, 1, 0, 0, 0, tzinfo=UTC)
+        bars = []
+        for i in range(100):
+            ts = base + timedelta(minutes=5 * i)
+            close = 45000.0 + i * 5.0  # Trending price
+            bars.append({
+                "ts": ts.isoformat().replace("+00:00", "Z"),
+                "open": close - 2,
+                "high": close + 5,
+                "low": close - 5,
+                "close": close,
+                "volume": 50.0 + i,
+            })
+        bars_df = pd.DataFrame(bars)
+
+        # Compute features on full dataset
+        features_full = builder.build_features("BTC-USD", bars_df)
+
+        # For several truncation points, verify that truncated computation matches
+        test_indices = [12, 24, 48, 75, 99]  # Test at various points including end
+        for k in test_indices:
+            builder_truncated = IntradayFeatureBuilder()
+            bars_truncated = bars_df.iloc[: k + 1].copy()
+            features_truncated = builder_truncated.build_features("BTC-USD", bars_truncated)
+
+            # Assert that all feature columns at index k match between truncated and full
+            feature_cols = [c for c in features_full.columns if c != "ts"]
+            for col in feature_cols:
+                val_full = features_full[col].iloc[k]
+                val_trunc = features_truncated[col].iloc[k]
+
+                # If both are NaN, they match
+                if pd.isna(val_full) and pd.isna(val_trunc):
+                    continue
+
+                # Otherwise, they should be float-equal (within tolerance)
+                assert np.isclose(val_full, val_trunc, atol=1e-9, equal_nan=True), \
+                    f"Feature {col} at index {k} differs: full={val_full}, truncated={val_trunc}"
 
 
 class TestDatabaseFetch:
