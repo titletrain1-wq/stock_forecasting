@@ -4,6 +4,7 @@ import json
 from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime
 
+from sqlalchemy import text
 from sqlmodel import Session, select
 
 from stock_forecasting.providers.base import Bar
@@ -69,10 +70,19 @@ class BarRepository:
             return 0
 
         now_str = datetime.now(UTC).isoformat()
+        today_utc = datetime.now(UTC).date()
         inserted_count = 0
         valid_bars: list[Bar] = []
 
-        for bar in bars:
+        # Filter out bars from today (forming/provisional candles).
+        # Spec requires closed bars only; today's bar is still forming.
+        bars_filtered = []
+        for b in bars:
+            ts = b.ts if hasattr(b, "ts") else b.get("ts", "")
+            if not ts.startswith(today_utc.isoformat()):
+                bars_filtered.append(b)
+
+        for bar in bars_filtered:
             reasons = self._validate_bar(bar)
             if reasons:
                 raw_payload = (
@@ -92,49 +102,87 @@ class BarRepository:
                 valid_bars.append(bar)
 
         if valid_bars:
-            timestamps = [b.ts for b in valid_bars]
-            existing_rows = self.session.exec(
-                select(OhlcvBar).where(
-                    OhlcvBar.ticker == ticker,
-                    OhlcvBar.interval == interval,
-                    OhlcvBar.ts.in_(timestamps),
-                )
-            ).all()
-            existing_map = {row.ts: row for row in existing_rows}
-
-            for bar in valid_bars:
-                if bar.ts in existing_map:
-                    # Update existing record
-                    existing = existing_map[bar.ts]
-                    existing.open = bar.open
-                    existing.high = bar.high
-                    existing.low = bar.low
-                    existing.close = bar.close
-                    existing.adj_close = bar.adj_close
-                    existing.volume = bar.volume
-                    existing.source = source
-                    existing.ingested_at = now_str
-                    self.session.add(existing)
-                else:
-                    new_row = OhlcvBar(
-                        ticker=ticker,
-                        interval=interval,
-                        ts=bar.ts,
-                        open=bar.open,
-                        high=bar.high,
-                        low=bar.low,
-                        close=bar.close,
-                        adj_close=bar.adj_close,
-                        volume=bar.volume,
-                        source=source,
-                        ingested_at=now_str,
+            # How many are genuinely new (return value / logging only).
+            existing_ts = {
+                row
+                for row in self.session.exec(
+                    select(OhlcvBar.ts).where(
+                        OhlcvBar.ticker == ticker,
+                        OhlcvBar.interval == interval,
+                        OhlcvBar.ts.in_([b.ts for b in valid_bars]),
                     )
-                    self.session.add(new_row)
-                    existing_map[bar.ts] = new_row
-                    inserted_count += 1
+                ).all()
+            }
+            inserted_count = sum(1 for b in valid_bars if b.ts not in existing_ts)
+            self._bulk_upsert(ticker, interval, source, now_str, valid_bars)
 
         self.session.commit()
         return inserted_count
+
+    def _bulk_upsert(
+        self,
+        ticker: str,
+        interval: str,
+        source: str,
+        now_str: str,
+        bars: list[Bar],
+    ) -> None:
+        """Idempotent bulk write of `bars` as ONE multi-row INSERT per chunk.
+
+        A single ``INSERT ... VALUES (..),(..),.. ON CONFLICT DO UPDATE`` is one
+        round trip for the whole chunk. `executemany` over a remote libSQL/Turso
+        connection instead does one network round trip *per row* (~200ms each),
+        which turned a 500-bar backfill into ~2 minutes. `ON CONFLICT` also
+        sidesteps SQLAlchemy's RETURNING batch-insert path, which libSQL rejects
+        on a duplicate and which then poisons the session for later tickers.
+        """
+        cols = (
+            "ticker",
+            "interval",
+            "ts",
+            "open",
+            "high",
+            "low",
+            "close",
+            "adj_close",
+            "volume",
+            "source",
+            "ingested_at",
+        )
+        update = ", ".join(f"{c}=excluded.{c}" for c in cols[3:])
+        conn = self.session.connection()
+        chunk = 100  # 100 rows * 11 cols = 1100 params, well under libSQL's cap
+        for start in range(0, len(bars), chunk):
+            batch = bars[start : start + chunk]
+            rows_sql = ", ".join(
+                f"(:t{i}, :iv{i}, :ts{i}, :o{i}, :h{i}, :l{i}, :c{i}, :ac{i}, "
+                f":v{i}, :s{i}, :ia{i})"
+                for i in range(len(batch))
+            )
+            params: dict[str, object] = {}
+            for i, b in enumerate(batch):
+                params.update(
+                    {
+                        f"t{i}": ticker,
+                        f"iv{i}": interval,
+                        f"ts{i}": b.ts,
+                        f"o{i}": b.open,
+                        f"h{i}": b.high,
+                        f"l{i}": b.low,
+                        f"c{i}": b.close,
+                        f"ac{i}": b.adj_close,
+                        f"v{i}": b.volume,
+                        f"s{i}": source,
+                        f"ia{i}": now_str,
+                    }
+                )
+            conn.execute(
+                text(
+                    f"INSERT INTO ohlcv_bars ({', '.join(cols)}) VALUES {rows_sql} "
+                    f"ON CONFLICT(ticker, interval, ts) DO UPDATE SET {update}"
+                ),
+                params,
+            )
 
     def get_range(
         self,

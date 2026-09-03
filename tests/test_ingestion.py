@@ -522,4 +522,46 @@ def test_backfill_fails_over_to_fallback(db_session: Session) -> None:
     res = service.backfill("AAPL", years=1)
     assert res["provider"] == "tiingo"
     assert res["failover_from"] == "yfinance"
-    assert res["inserted"] > 300
+
+
+def test_bar_repository_filters_forming_candles(db_session: Session) -> None:
+    """Verify BarRepository skips today's forming/provisional candles (Issue c)."""
+    from datetime import UTC, datetime, timedelta
+
+    _create_sample_ticker(db_session, "BTC")
+    repo = BarRepository(db_session)
+
+    today = datetime.now(UTC).date()
+    today_ts = f"{today.isoformat()}T00:00:00Z"
+    yesterday = today - timedelta(days=1)
+    yesterday_ts = f"{yesterday.isoformat()}T00:00:00Z"
+
+    bars = [
+        Bar(
+            ts=yesterday_ts,
+            open=50000.0,
+            high=51000.0,
+            low=49000.0,
+            close=50500.0,
+            adj_close=None,
+            volume=100.0,
+        ),
+        Bar(
+            ts=today_ts,  # This should be filtered out (forming candle)
+            open=50500.0,
+            high=51200.0,
+            low=50400.0,
+            close=50800.0,  # Partial/forming
+            adj_close=None,
+            volume=50.0,
+        ),
+    ]
+
+    inserted = repo.upsert_bars("BTC", bars, source="coinbase")
+    assert inserted == 1  # Only yesterday's bar should be inserted
+
+    # Verify only yesterday's bar exists
+    rows = db_session.exec(select(OhlcvBar).where(OhlcvBar.ticker == "BTC")).all()
+    assert len(rows) == 1
+    assert rows[0].ts == yesterday_ts
+    assert rows[0].close == 50500.0

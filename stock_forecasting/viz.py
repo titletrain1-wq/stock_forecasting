@@ -20,6 +20,7 @@ Spec §7 "Technical indicators":
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from typing import Any, Protocol
 
@@ -27,6 +28,8 @@ import pandas as pd
 import pandas_ta as ta
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+
+logger = logging.getLogger(__name__)
 
 ACTUAL_COLOR = "#2962FF"
 RIBBON_COLOR = "#FF6D00"
@@ -109,42 +112,51 @@ def _compute_indicators(bars: list[_BarLike]) -> dict[str, Any]:
     # Convert bars to DataFrame
     b_sorted = sorted(bars, key=lambda b: str(b.ts))
     data = {
-        'ts': [b.ts for b in b_sorted],
-        'open': [b.open for b in b_sorted],
-        'high': [b.high for b in b_sorted],
-        'low': [b.low for b in b_sorted],
-        'close': [b.close for b in b_sorted],
-        'volume': [getattr(b, 'volume', 0) for b in b_sorted],
+        "ts": [b.ts for b in b_sorted],
+        "open": [b.open for b in b_sorted],
+        "high": [b.high for b in b_sorted],
+        "low": [b.low for b in b_sorted],
+        "close": [b.close for b in b_sorted],
+        "volume": [getattr(b, "volume", 0) for b in b_sorted],
     }
     df = pd.DataFrame(data)
 
-    result = {'df': df, 'ts': df['ts'].tolist()}
+    result = {"df": df, "ts": df["ts"].tolist()}
 
     try:
         # Price pane indicators
-        result['sma20'] = ta.sma(df['close'], length=20).tolist()
-        result['sma50'] = ta.sma(df['close'], length=50).tolist()
-        bbands = ta.bbands(df['close'], length=20, std=2)
+        sma20 = ta.sma(df["close"], length=20)
+        if sma20 is not None:
+            result["sma20"] = sma20.tolist()
+        sma50 = ta.sma(df["close"], length=50)
+        if sma50 is not None:
+            result["sma50"] = sma50.tolist()
+
+        bbands = ta.bbands(df["close"], length=20, std=2)
         if bbands is not None and len(bbands.columns) >= 3:
-            result['bb_upper'] = bbands.iloc[:, 2].tolist()
-            result['bb_lower'] = bbands.iloc[:, 0].tolist()
+            result["bb_upper"] = bbands.iloc[:, 2].tolist()
+            result["bb_lower"] = bbands.iloc[:, 0].tolist()
 
         # RSI sub-pane
-        result['rsi'] = ta.rsi(df['close'], length=14).tolist()
+        rsi = ta.rsi(df["close"], length=14)
+        if rsi is not None:
+            result["rsi"] = rsi.tolist()
 
         # MACD sub-pane (columns: [MACD, MACDh(histogram), MACDs(signal)])
-        macd = ta.macd(df['close'], fast=12, slow=26, signal=9)
+        macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
         if macd is not None and len(macd.columns) >= 3:
-            result['macd_line'] = macd.iloc[:, 0].tolist()
-            result['macd_hist'] = macd.iloc[:, 1].tolist()  # histogram is column 1
-            result['macd_signal'] = macd.iloc[:, 2].tolist()  # signal is column 2
+            result["macd_line"] = macd.iloc[:, 0].tolist()
+            result["macd_hist"] = macd.iloc[:, 1].tolist()  # histogram is column 1
+            result["macd_signal"] = macd.iloc[:, 2].tolist()  # signal is column 2
 
         # Volume sub-pane
-        result['volume'] = df['volume'].tolist()
-        result['volume_sma'] = ta.sma(df['volume'], length=20).tolist()
-    except Exception:
+        result["volume"] = df["volume"].tolist()
+        volume_sma = ta.sma(df["volume"], length=20)
+        if volume_sma is not None:
+            result["volume_sma"] = volume_sma.tolist()
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError) as e:
         # Gracefully handle indicator computation errors (e.g., insufficient data)
-        pass
+        logger.warning(f"Indicator computation failed: {e}")
 
     return result
 
@@ -176,6 +188,7 @@ def build_price_figure(
     show_rsi: bool = True,
     show_macd: bool = True,
     show_volume: bool = True,
+    uirevision: str | bool = True,
 ) -> go.Figure:
     """Assemble the actual + forecast-overlay Plotly figure with optional technical indicators.
 
@@ -193,6 +206,10 @@ def build_price_figure(
         show_rsi: show RSI14 as sub-pane.
         show_macd: show MACD as sub-pane.
         show_volume: show Volume + Volume SMA as sub-pane.
+        uirevision: Plotly ``layout.uirevision``. Keep it constant across live-tick
+            refreshes of the same ticker/range so zoom & pan survive; change it
+            (e.g. ``"AAPL:6M"``) when the ticker or range changes so Plotly fully
+            redraws instead of freezing on the previous series.
 
     Returns:
         A ``plotly.graph_objects.Figure``. Empty inputs yield an annotated blank figure.
@@ -254,13 +271,13 @@ def build_price_figure(
             )
 
         # Add price-pane indicators (SMA, Bollinger)
-        if indicators and 'ts' in indicators:
-            ts = indicators['ts']
-            if show_sma and 'sma20' in indicators:
+        if indicators and "ts" in indicators:
+            ts = indicators["ts"]
+            if show_sma and "sma20" in indicators:
                 fig.add_trace(
                     go.Scatter(
                         x=ts,
-                        y=indicators['sma20'],
+                        y=indicators["sma20"],
                         name="SMA20",
                         mode="lines",
                         line={"color": "rgba(200, 150, 100, 0.8)", "width": 1},
@@ -269,11 +286,11 @@ def build_price_figure(
                     row=1,
                     col=1,
                 )
-            if show_sma and 'sma50' in indicators:
+            if show_sma and "sma50" in indicators:
                 fig.add_trace(
                     go.Scatter(
                         x=ts,
-                        y=indicators['sma50'],
+                        y=indicators["sma50"],
                         name="SMA50",
                         mode="lines",
                         line={"color": "rgba(150, 100, 200, 0.8)", "width": 1},
@@ -282,14 +299,18 @@ def build_price_figure(
                     row=1,
                     col=1,
                 )
-            if show_bollinger and 'bb_upper' in indicators:
+            if show_bollinger and "bb_upper" in indicators:
                 fig.add_trace(
                     go.Scatter(
                         x=ts,
-                        y=indicators['bb_upper'],
+                        y=indicators["bb_upper"],
                         name="BB Upper",
                         mode="lines",
-                        line={"color": "rgba(100, 100, 200, 0.5)", "width": 1, "dash": "dot"},
+                        line={
+                            "color": "rgba(100, 100, 200, 0.5)",
+                            "width": 1,
+                            "dash": "dot",
+                        },
                         hovertemplate="%{x}<br>BB Upper %{y:.2f}<extra></extra>",
                     ),
                     row=1,
@@ -298,10 +319,14 @@ def build_price_figure(
                 fig.add_trace(
                     go.Scatter(
                         x=ts,
-                        y=indicators['bb_lower'],
+                        y=indicators["bb_lower"],
                         name="BB Lower",
                         mode="lines",
-                        line={"color": "rgba(100, 100, 200, 0.5)", "width": 1, "dash": "dot"},
+                        line={
+                            "color": "rgba(100, 100, 200, 0.5)",
+                            "width": 1,
+                            "dash": "dot",
+                        },
                         fill="tonexty",
                         fillcolor="rgba(100, 100, 200, 0.1)",
                         hovertemplate="%{x}<br>BB Lower %{y:.2f}<extra></extra>",
@@ -416,15 +441,15 @@ def build_price_figure(
         )
 
     # Add sub-pane indicators (RSI, MACD, Volume)
-    if indicators and 'ts' in indicators:
-        ts = indicators['ts']
+    if indicators and "ts" in indicators:
+        ts = indicators["ts"]
         subpane_row = 2  # Start at row 2 (row 1 is price pane)
 
-        if show_rsi and 'rsi' in indicators:
+        if show_rsi and "rsi" in indicators:
             fig.add_trace(
                 go.Scatter(
                     x=ts,
-                    y=indicators['rsi'],
+                    y=indicators["rsi"],
                     name="RSI14",
                     mode="lines",
                     line={"color": "rgba(100, 200, 100, 0.8)", "width": 1},
@@ -444,11 +469,11 @@ def build_price_figure(
                 )
             subpane_row += 1
 
-        if show_macd and 'macd_line' in indicators:
+        if show_macd and "macd_line" in indicators:
             fig.add_trace(
                 go.Scatter(
                     x=ts,
-                    y=indicators['macd_line'],
+                    y=indicators["macd_line"],
                     name="MACD",
                     mode="lines",
                     line={"color": "rgba(200, 100, 100, 0.8)", "width": 1},
@@ -460,7 +485,7 @@ def build_price_figure(
             fig.add_trace(
                 go.Scatter(
                     x=ts,
-                    y=indicators['macd_signal'],
+                    y=indicators["macd_signal"],
                     name="MACD Signal",
                     mode="lines",
                     line={"color": "rgba(150, 100, 150, 0.8)", "width": 1},
@@ -472,9 +497,14 @@ def build_price_figure(
             fig.add_trace(
                 go.Bar(
                     x=ts,
-                    y=indicators['macd_hist'],
+                    y=indicators["macd_hist"],
                     name="MACD Hist",
-                    marker={"color": ["green" if h >= 0 else "red" for h in indicators['macd_hist']]},
+                    marker={
+                        "color": [
+                            "green" if h >= 0 else "red"
+                            for h in indicators["macd_hist"]
+                        ]
+                    },
                     hovertemplate="%{x}<br>Hist %{y:.4f}<extra></extra>",
                     showlegend=False,
                 ),
@@ -483,11 +513,11 @@ def build_price_figure(
             )
             subpane_row += 1
 
-        if show_volume and 'volume' in indicators:
+        if show_volume and "volume" in indicators:
             fig.add_trace(
                 go.Bar(
                     x=ts,
-                    y=indicators['volume'],
+                    y=indicators["volume"],
                     name="Volume",
                     marker={"color": "rgba(100, 100, 200, 0.5)"},
                     hovertemplate="%{x}<br>Vol %{y:.0f}<extra></extra>",
@@ -495,11 +525,11 @@ def build_price_figure(
                 row=subpane_row,
                 col=1,
             )
-            if 'volume_sma' in indicators:
+            if "volume_sma" in indicators:
                 fig.add_trace(
                     go.Scatter(
                         x=ts,
-                        y=indicators['volume_sma'],
+                        y=indicators["volume_sma"],
                         name="Volume SMA20",
                         mode="lines",
                         line={"color": "rgba(100, 100, 200, 0.9)", "width": 1},
@@ -517,18 +547,30 @@ def build_price_figure(
     }
 
     fig.update_yaxes(title_text="Price", row=1, col=1)
-    for row_idx, (yaxis_key, title) in enumerate(subpane_titles.items(), start=2):
-        if title:
-            fig.update_yaxes(title_text=title, row=row_idx, col=1)
+    for row_idx, (yaxis_key, subpane_title) in enumerate(
+        subpane_titles.items(), start=2
+    ):
+        if subpane_title:
+            fig.update_yaxes(title_text=subpane_title, row=row_idx, col=1)
 
     fig.update_layout(
         title=title,
+        xaxis_title="Date",
         hovermode="x unified",
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02},
         margin={"l": 50, "r": 20, "t": 50, "b": 40},
         height=600 if num_subpanes > 0 else 480,
-        uirevision=True,  # uirevision keeps zoom / pan / hover state across @st.fragment tick refreshes
+        uirevision=uirevision,  # constant across live-tick refreshes; changes on ticker/range switch so Plotly redraws
     )
+
+    # Disable rangeslider for candlestick traces (compress the pane stack)
+    fig.update_xaxes(rangeslider={"visible": False})
+
+    # Pin uirevision on every (sub-pane) axis too, not just the layout default,
+    # so a live-refresh rebuild of this make_subplots figure keeps the viewer's
+    # zoom / pan on all panes.
+    fig.update_xaxes(uirevision=uirevision)
+    fig.update_yaxes(uirevision=uirevision)
 
     # M6 overlay-integrity fence: the calibration disclaimer rides on every
     # figure. The band stays P_close-anchored; live ticks only move the "live"
@@ -556,7 +598,32 @@ def build_price_figure(
             font={"size": 14},
         )
 
+    _assign_stable_uids(fig)
     return fig
+
+
+def _assign_stable_uids(fig: go.Figure) -> None:
+    """Give every trace a deterministic ``uid``.
+
+    The live-price fragment rebuilds this whole figure on every refresh tick. With
+    no ``uid`` Plotly assigns a fresh random one each rebuild, so ``Plotly.react``
+    cannot match the new traces to the old ones and remounts them — which throws
+    away the viewer's zoom / pan even though ``layout.uirevision`` is constant.
+    A stable uid keyed to the trace's role lets react update the data in place and
+    keep the current view. ``add_live_price_line`` sets its own ("live"/"forming").
+    """
+    counts: dict[str, int] = {}
+    for tr in fig.data:
+        meta = getattr(tr, "meta", None)
+        if isinstance(meta, dict) and meta.get("kind"):
+            base = str(meta["kind"])
+            if meta.get("horizon"):
+                base = f"{base}_{meta['horizon']}"
+        else:
+            base = tr.name or type(tr).__name__
+        base = str(base).replace(" ", "_").lower()
+        counts[base] = counts.get(base, 0) + 1
+        tr.uid = f"{base}_{counts[base]}"
 
 
 def add_live_price_line(
@@ -598,6 +665,7 @@ def add_live_price_line(
             line={"color": LIVE_COLOR, "width": 2},
             hovertemplate="%{x}<br>live %{y:.2f}<extra></extra>",
             meta={"kind": "live"},
+            uid="live",
         )
     )
 
@@ -631,6 +699,7 @@ def add_live_price_line(
             line={"width": 1},
             hovertext="forming bucket — provisional (is_provisional=1)",
             meta={"kind": "forming"},
+            uid="forming",
         )
     )
     return fig

@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     poll_interval_equity_min: int = 60
     backfill_years: int = 5
     db_path: str = "./data/app.db"
+    turso_database_url: str = ""  # libSQL connection string (e.g. sqlite+libsql://...)
+    turso_auth_token: str = ""  # Turso auth token
     retrain_hour_utc: int = 22
     tiingo_api_key: str = ""
     finnhub_api_key: str = ""

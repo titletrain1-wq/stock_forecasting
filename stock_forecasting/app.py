@@ -14,7 +14,7 @@ import streamlit as st
 from sqlmodel import Session, select
 
 from stock_forecasting.config import get_settings
-from stock_forecasting.database import get_engine
+from stock_forecasting.database import create_tables, get_engine, seed_watchlist
 from stock_forecasting.health_view import build_health_view
 from stock_forecasting.intraday_store import IntradayRepository, LiveQuoteRepository
 from stock_forecasting.panels import (
@@ -27,6 +27,7 @@ from stock_forecasting.schema import (
     AccuracyRecord,
     OhlcvBar,
     PredictionSnapshot,
+    SystemHeartbeat,
     Ticker,
 )
 from stock_forecasting.viz import (
@@ -124,7 +125,7 @@ def load_accuracy_records(
 
 
 def add_ticker(engine, symbol: str) -> None:
-    """Insert a new active equity ticker if it does not already exist."""
+    """Insert a new active ticker (equity or crypto) if it does not already exist."""
     sym = symbol.strip().upper()
     if not sym:
         return
@@ -132,14 +133,15 @@ def add_ticker(engine, symbol: str) -> None:
         existing = session.exec(select(Ticker).where(Ticker.symbol == sym)).first()
         if existing:
             return
+        is_crypto = sym.endswith("-USD")
         session.add(
             Ticker(
                 symbol=sym,
-                asset_class="equity",
+                asset_class="crypto" if is_crypto else "equity",
                 display_name=sym,
-                provider="yfinance",
+                provider="coinbase" if is_crypto else "yfinance",
                 provider_symbol=sym,
-                price_basis="adjusted",
+                price_basis="raw" if is_crypto else "adjusted",
                 added_at=datetime.now(UTC).isoformat(),
                 active=1,
             )
@@ -164,16 +166,22 @@ def render_sidebar(engine, tickers: list[Ticker]) -> None:
             st.rerun()
 
 
-def render_price_header(symbol: str, bars: list[OhlcvBar]) -> None:
-    """Symbol · latest price · % change from previous close."""
+def render_price_header(symbol: str, bars: list[OhlcvBar], quotes=None) -> None:
+    """Symbol · latest price · % change from previous close.
+
+    ``quotes`` (optional) is the live-quote sequence; when present the price tile
+    shows the latest live tick instead of the last daily close.
+    """
     if not bars:
         st.subheader(f"{symbol} — no bars ingested yet")
         return
     last = bars[-1]
     prev_close = bars[-2].close if len(bars) > 1 else last.close
-    pct = ((last.close - prev_close) / prev_close * 100.0) if prev_close else 0.0
+    quote = quotes[-1] if quotes else None
+    price = quote.price if quote is not None else last.close
+    pct = ((price - prev_close) / prev_close * 100.0) if prev_close else 0.0
     col1, col2, col3 = st.columns(3)
-    col1.metric(symbol, f"${last.close:,.2f}", f"{pct:+.2f}%")
+    col1.metric(symbol, f"${price:,.2f}", f"{pct:+.2f}%")
     col2.metric("Latest bar", last.ts[:10])
     col3.metric("Bars in range", str(len(bars)))
 
@@ -203,41 +211,49 @@ def render_chart_panel(engine, symbol: str, ticker: Ticker) -> None:
 
     bars = load_bars(engine, symbol, RANGE_DAYS[range_label])
     snapshots = load_snapshots(engine, symbol)
+    quotes, intraday = load_live(engine, symbol, ticker.asset_class)
 
-    def _live_region() -> None:
-        """Price header + streaming chart — re-executed on the fragment tick.
+    def _live_header() -> None:
+        """Live price header — the ONLY thing that re-runs on the fragment tick.
 
-        Only this function re-runs (Spec §3.1): the range/overlay controls above
-        and the panels below keep their state and scroll position.
+        The actual+forecast chart is deliberately NOT in here: Streamlit re-mounts
+        an ``st.plotly_chart`` on every ``run_every`` tick (no in-place
+        ``Plotly.react``), which throws away the viewer's zoom / pan and makes the
+        chart impossible to study while it refreshes. The chart is rendered once
+        per interaction below; only this lightweight header chases the live quote.
         """
-        quotes, intraday = load_live(engine, symbol, ticker.asset_class)
-        render_price_header(symbol, bars)
+        q, _intraday = load_live(engine, symbol, ticker.asset_class)
+        render_price_header(symbol, bars, q)
         badge = _delayed_badge(ticker.asset_class)
         if badge:
             st.caption(badge)
-        fig = build_price_figure(
-            bars,
-            snapshots,
-            ribbon_horizon=None if ribbon_horizon == "(none)" else ribbon_horizon,
-            show_markers=show_markers,
-            show_actual_candles=use_candles,
-            latest_horizons=tuple(latest_horizons),
-            title=f"{symbol} · actual vs forecast",
-            show_sma=show_sma,
-            show_bollinger=show_bollinger,
-            show_rsi=show_rsi,
-            show_macd=show_macd,
-            show_volume=show_volume,
-        )
-        add_live_price_line(fig, quotes, intraday)
-        # Stable key -> Streamlit reuses the existing Plotly canvas instead of
-        # remounting it, so ticks update in place without flicker (Spec §3.1).
-        st.plotly_chart(fig, use_container_width=True, key="live_price_chart")
-        # M6: calibration disclaimer — the CI band is anchored to P_close, never
-        # the live price. Also on the figure itself and in KNOWN_LIMITATIONS.md.
-        st.caption(CI_DISCLAIMER)
 
-    st.fragment(_live_region, run_every=_refresh_for(ticker.asset_class))()
+    st.fragment(_live_header, run_every=_refresh_for(ticker.asset_class))()
+
+    fig = build_price_figure(
+        bars,
+        snapshots,
+        ribbon_horizon=None if ribbon_horizon == "(none)" else ribbon_horizon,
+        show_markers=show_markers,
+        show_actual_candles=use_candles,
+        latest_horizons=tuple(latest_horizons),
+        title=f"{symbol} · actual vs forecast",
+        uirevision=f"{symbol}:{range_label}",
+        show_sma=show_sma,
+        show_bollinger=show_bollinger,
+        show_rsi=show_rsi,
+        show_macd=show_macd,
+        show_volume=show_volume,
+    )
+    add_live_price_line(fig, quotes, intraday)
+    # Stable key so a control change (range / overlay toggle) redraws in place and
+    # keeps the current zoom. The live line here is as-of the last full rerun; it
+    # advances when you touch a control or reload, not on a timer — a deliberate
+    # trade so the chart stays steady enough to read.
+    st.plotly_chart(fig, use_container_width=True, key="live_price_chart")
+    # M6: calibration disclaimer — the CI band is anchored to P_close, never
+    # the live price. Also on the figure itself and in KNOWN_LIMITATIONS.md.
+    st.caption(CI_DISCLAIMER)
 
 
 def render_accuracy_panel(engine, symbol: str) -> None:
@@ -338,15 +354,53 @@ def render_health_panel(engine) -> None:
     )
 
 
+def _bootstrap(engine) -> None:
+    """Best-effort schema + watchlist bootstrap.
+
+    In production the worker / backfill job owns the schema; the app only
+    reads. A DDL hiccup on the hosted DB (e.g. Turso quirks around
+    ``CREATE TABLE``) must not take the whole UI down when the tables already
+    exist, so this is non-fatal.
+    """
+    for step in (create_tables, seed_watchlist):
+        try:
+            step(engine)
+        except Exception as exc:  # noqa: BLE001 - startup must not hard-fail
+            st.session_state.setdefault("_bootstrap_warnings", []).append(
+                f"{step.__name__}: {exc}"
+            )
+
+
 def main() -> None:
     """Render the single-screen forecast view."""
     st.set_page_config(layout="wide", page_title="Stock Forecasting")
     engine = get_engine()
+    _bootstrap(engine)
 
-    tickers = load_tickers(engine)
+    try:
+        tickers = load_tickers(engine)
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Database read failed: {exc}")
+        st.stop()
+        return
     render_sidebar(engine, tickers)
 
     st.title("Stock Forecast View")
+    for warn in st.session_state.get("_bootstrap_warnings", []):
+        st.caption(f"startup warning - {warn}")
+
+    with st.expander("diagnostics", expanded=not tickers):
+        s = get_settings()
+        turso = bool(s.turso_database_url and s.turso_database_url.strip())
+        st.write(f"DB target: **{'Turso (remote)' if turso else 'local sqlite'}**")
+        st.write(f"TURSO_DATABASE_URL set: {turso}")
+        try:
+            with Session(engine) as _s:
+                nb = _s.exec(select(OhlcvBar)).all()
+                nh = _s.exec(select(SystemHeartbeat)).all()
+            st.write(f"ohlcv_bars rows: {len(nb)}  ·  system_heartbeat rows: {len(nh)}")
+        except Exception as exc:  # noqa: BLE001
+            st.write(f"count query failed: {exc}")
     if not tickers:
         st.info("Add a ticker in the sidebar to get started.")
         return

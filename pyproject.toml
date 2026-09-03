@@ -6,6 +6,7 @@ description = "Personal single-user stock/crypto forecast app with immutable led
 requires-python = ">=3.12"
 dependencies = [
     "sqlmodel>=0.0.14",
+    "libsql>=0.1.11",
     "streamlit>=1.28",
     "pandas>=2.0",
     "numpy>=1.24",

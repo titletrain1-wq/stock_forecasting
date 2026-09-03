@@ -291,9 +291,7 @@ class IntradayPredictionSnapshot(SQLModel, table=True):
 
     __tablename__ = "intraday_prediction_snapshots"
     __table_args__ = (
-        UniqueConstraint(
-            "ticker", "horizon", "anchor_ts", name="uq_intraday_forecast"
-        ),
+        UniqueConstraint("ticker", "horizon", "anchor_ts", name="uq_intraday_forecast"),
         Index("ix_intraday_pred_lookup", "ticker", "horizon", "made_at"),
         Index("ix_intraday_pred_target_ts", "target_ts"),
     )
@@ -319,16 +317,16 @@ class IntradayAccuracyRecord(SQLModel, table=True):
     """Intraday grading results (written by evaluator job when target matures)."""
 
     __tablename__ = "intraday_accuracy_records"
-    __table_args__ = (
-        Index("ix_intraday_acc_pred_id", "prediction_id"),
-    )
+    __table_args__ = (Index("ix_intraday_acc_pred_id", "prediction_id"),)
 
     id: int | None = Field(default=None, primary_key=True)
     prediction_id: int = Field(foreign_key="intraday_prediction_snapshots.id")
     ticker: str = Field(foreign_key="tickers.symbol")
     horizon: str  # "1h" | "4h"
     graded_at: str  # wall-clock when grade was computed
-    realized_return: float | None = None  # actual log-return (populated when bar matures)
+    realized_return: float | None = (
+        None  # actual log-return (populated when bar matures)
+    )
     realized_price: float | None = None  # actual close price at target_ts
     signed_error: float | None = None  # realized_return - predicted_return
     abs_error_pct: float | None = None  # |signed_error| * 100

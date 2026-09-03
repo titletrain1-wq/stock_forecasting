@@ -351,15 +351,51 @@ class WorkerScheduler:
         logger.info("Executing job_retrain_nightly...")
         with Session(self.engine) as session:
             try:
+                from stock_forecasting.bar_store import BarRepository
+
                 active_tickers = session.exec(
                     select(Ticker).where(Ticker.active == 1)
                 ).all()
                 trainer = Trainer(session)
                 forecaster = ForecastService(session)
+                bar_repo = BarRepository(session)
+                ingestion_service = IngestionService(session, self.providers)
                 horizons = ["1d", "5d", "30d"]
                 model_types = ["ridge", "random_forest"]
 
                 for ticker in active_tickers:
+                    # Auto-backfill if ticker has < 250 daily bars
+                    bars = bar_repo.get_range(
+                        ticker.symbol, "0000", "9999", interval="1d"
+                    )
+                    bar_count = len(bars) if bars else 0
+                    if bar_count < 250:
+                        logger.info(
+                            "Auto-backfill: %s has %d bars (< 250), fetching 2 years",
+                            ticker.symbol,
+                            bar_count,
+                        )
+                        try:
+                            result = ingestion_service.backfill(ticker.symbol, years=2)
+                            session.commit()
+                            new_bars = bar_repo.get_range(
+                                ticker.symbol, "0000", "9999", interval="1d"
+                            )
+                            new_count = len(new_bars) if new_bars else 0
+                            logger.info(
+                                "Auto-backfill %s: %d -> %d bars (%s)",
+                                ticker.symbol,
+                                bar_count,
+                                new_count,
+                                result,
+                            )
+                        except Exception:
+                            session.rollback()
+                            logger.exception(
+                                "Auto-backfill %s failed - training on what exists",
+                                ticker.symbol,
+                            )
+
                     for horizon in horizons:
                         for model_type in model_types:
                             try:

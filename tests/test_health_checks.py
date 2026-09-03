@@ -508,3 +508,140 @@ def test_compute_system_status_db_failure() -> None:
     status, reasons = checker.compute_system_status()
     assert status == "CRITICAL"
     assert any("SQLite disk I/O error" in r for r in reasons)
+
+
+def test_active_provider_filter_detects_crypto_outage(db_session: Session) -> None:
+    """Provider casing fix: active job_ingest_crypto heartbeat + failing coinbase row -> detects outage.
+
+    This test verifies that when job_ingest_crypto is active (recent heartbeat)
+    and linkmetrics contains a failing 'coinbase' provider (lowercase, matching DB),
+    the health checks properly detect the outage instead of silently returning NOMINAL.
+
+    Regression test for Issue 8: mixed-case JOB_TYPE_TO_PROVIDERS names prevented
+    filter from matching lowercase LinkMetrics.provider values.
+    """
+    now = datetime(2026, 9, 1, 12, 0, 0, tzinfo=UTC)
+    now_iso = now.isoformat()
+
+    # Create active job heartbeat for crypto ingestion (within last 60m)
+    crypto_job = SystemHeartbeat(
+        job_type="job_ingest_crypto",
+        worker_pid=1234,
+        last_pulse_ts=(now - timedelta(minutes=5)).isoformat(),
+        last_success_ts=(now - timedelta(minutes=5)).isoformat(),
+        consecutive_failures=0,
+    )
+    db_session.add(crypto_job)
+
+    # Create failing coinbase LinkMetrics row (lowercase, matching worker.py registry)
+    failing_metric = LinkMetrics(
+        provider="coinbase",  # lowercase, as stored by worker
+        rtt_p50_ms=5000.0,
+        rtt_p95_ms=10000.0,
+        rtt_jitter_ms=3000.0,
+        error_rate=1.0,  # All calls failing
+        consecutive_failures=10,
+        breaker_state="open",
+        calls_today=100,
+        daily_limit=1000,
+        quota_pct=1.0,
+        updated_at=now_iso,
+    )
+    db_session.add(failing_metric)
+    db_session.commit()
+
+    checker = HealthChecker(db_session)
+
+    # All three checks must detect the active provider's outage
+    latency_result = checker.check_latency()
+    assert latency_result.status == "DEGRADED", "Latency check should detect high RTT"
+
+    error_result = checker.check_error_rate()
+    assert error_result.status == "CRITICAL", (
+        "Error rate check should detect breaker open + 100% failure"
+    )
+    assert "coinbase" in error_result.message.lower(), (
+        "Error message should name the failing provider"
+    )
+
+    quota_result = checker.check_quota()
+    assert quota_result.status == "CRITICAL", "Quota check should detect 100% usage"
+
+
+def test_stale_provider_errors_suppressed(db_session: Session) -> None:
+    """Non-active providers (no recent job heartbeat) should have errors suppressed from checks.
+
+    This test verifies the intended behavior: when a provider has no active job heartbeat,
+    its LinkMetrics errors should NOT trigger degradation. Only actively-polled providers
+    contribute to health status. This is the actual filter suppression behavior.
+
+    Setup: active job_ingest_equities job (yfinance active) + failing coingecko (no active crypto job).
+    Expected: coingecko's errors suppressed -> NOMINAL.
+    """
+    now = datetime(2026, 9, 1, 12, 0, 0, tzinfo=UTC)
+    now_iso = now.isoformat()
+
+    # Create an active job_ingest_equities heartbeat (equities job is active)
+    active_equities_job = SystemHeartbeat(
+        job_type="job_ingest_equities",
+        worker_pid=1234,
+        last_pulse_ts=(now - timedelta(minutes=5)).isoformat(),  # Active
+        last_success_ts=(now - timedelta(minutes=5)).isoformat(),
+        consecutive_failures=0,
+    )
+    db_session.add(active_equities_job)
+
+    # Create healthy yfinance LinkMetrics row (yfinance is in active equities set)
+    healthy_metric = LinkMetrics(
+        provider="yfinance",  # lowercase, active in equities job
+        rtt_p50_ms=200.0,
+        rtt_p95_ms=400.0,
+        rtt_jitter_ms=100.0,
+        error_rate=0.0,
+        consecutive_failures=0,
+        breaker_state="closed",
+        calls_today=50,
+        daily_limit=1000,
+        quota_pct=0.05,
+        updated_at=now_iso,
+    )
+    db_session.add(healthy_metric)
+
+    # Create FAILING coingecko LinkMetrics row (coingecko NOT in active equities set)
+    # This provider's errors should be SUPPRESSED because no active crypto job
+    failing_metric = LinkMetrics(
+        provider="coingecko",  # lowercase, but no active crypto job
+        rtt_p50_ms=5000.0,
+        rtt_p95_ms=10000.0,
+        rtt_jitter_ms=3000.0,
+        error_rate=0.9,  # 90% failure rate
+        consecutive_failures=8,
+        breaker_state="open",  # Circuit open
+        calls_today=100,
+        daily_limit=1000,
+        quota_pct=0.9,
+        updated_at=now_iso,
+    )
+    db_session.add(failing_metric)
+    db_session.commit()
+
+    checker = HealthChecker(db_session)
+
+    # active_providers = {yfinance, tiingo, finnhub, fake} (from active job_ingest_equities)
+    # Filter removes coingecko, leaving only [yfinance] which is healthy
+    # Coingecko's errors are suppressed -> all checks return NOMINAL
+    error_result = checker.check_error_rate(now=now)
+    assert error_result.status == "NOMINAL", (
+        f"Inactive coingecko errors should be suppressed. Got: {error_result.message}"
+    )
+    assert "yfinance" in error_result.details
+
+    latency_result = checker.check_latency(now=now)
+    assert latency_result.status == "NOMINAL", (
+        "Inactive coingecko latency should be suppressed"
+    )
+
+    quota_result = checker.check_quota(now=now)
+    assert quota_result.status == "NOMINAL", (
+        "Inactive coingecko quota should be suppressed"
+    )
