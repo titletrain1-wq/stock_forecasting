@@ -254,3 +254,84 @@ class CryptoDerivative(SQLModel, table=True):
     funding_rate: float | None = None
     open_interest: float | None = None
     source: str = "dydx"
+
+
+class IntradayBarsHistory(SQLModel, table=True):
+    """Immutable intraday bars store for ML training and grading (365-day retention).
+
+    Separate from ``intraday_bars`` (7-day display cache). Written once per closed bar.
+    Both training pipeline and evaluator read from this table.
+    """
+
+    __tablename__ = "intraday_bars_history"
+    __table_args__ = (
+        UniqueConstraint("ticker", "interval", "ts", name="uq_intraday_bars_history"),
+        Index("ix_intraday_history_lookup", "ticker", "interval", "ts"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    ticker: str = Field(foreign_key="tickers.symbol")
+    interval: str  # "1m" | "5m"
+    ts: str  # bucket start, ISO-8601 UTC (closed bars only)
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float = 0.0
+    source: str  # "coinbase_rest" | "coinbase_ws_finalized"
+    ingested_at: str
+
+
+class IntradayPredictionSnapshot(SQLModel, table=True):
+    """Intraday forecast ledger (1h and 4h horizons, crypto only).
+
+    Written by forecast-writer worker job (sole writer, hourly).
+    Graded by evaluator job when targets mature.
+    """
+
+    __tablename__ = "intraday_prediction_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "ticker", "horizon", "anchor_ts", name="uq_intraday_forecast"
+        ),
+        Index("ix_intraday_pred_lookup", "ticker", "horizon", "made_at"),
+        Index("ix_intraday_pred_target_ts", "target_ts"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    ticker: str = Field(foreign_key="tickers.symbol")
+    horizon: str  # "1h" | "4h"
+    made_at: str  # wall-clock UTC when forecast was written
+    anchor_ts: str  # timestamp of the closed bar used for features
+    anchor_price: float  # close price of anchor bar
+    predicted_return: float  # model's log-return forecast
+    predicted_price: float  # anchor_price * exp(predicted_return)
+    ci_lower_return: float  # HAR-RV lower bound (log-return space)
+    ci_upper_return: float  # HAR-RV upper bound (log-return space)
+    ci_lower_price: float  # denormalized to price space
+    ci_upper_price: float  # denormalized to price space
+    target_ts: str  # when prediction target matures
+    model_version: str  # version string of model used
+    model_sha: str  # git SHA of model training code
+
+
+class IntradayAccuracyRecord(SQLModel, table=True):
+    """Intraday grading results (written by evaluator job when target matures)."""
+
+    __tablename__ = "intraday_accuracy_records"
+    __table_args__ = (
+        Index("ix_intraday_acc_pred_id", "prediction_id"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    prediction_id: int = Field(foreign_key="intraday_prediction_snapshots.id")
+    ticker: str = Field(foreign_key="tickers.symbol")
+    horizon: str  # "1h" | "4h"
+    graded_at: str  # wall-clock when grade was computed
+    realized_return: float | None = None  # actual log-return (populated when bar matures)
+    realized_price: float | None = None  # actual close price at target_ts
+    signed_error: float | None = None  # realized_return - predicted_return
+    abs_error_pct: float | None = None  # |signed_error| * 100
+    direction_hit: int | None = None  # 1 if sign(predicted) == sign(realized), else 0
+    ci_cover: int | None = None  # 1 if realized_return in [ci_lower, ci_upper], else 0
+    grading_attempts: int = 0  # incremented if bar not yet matured

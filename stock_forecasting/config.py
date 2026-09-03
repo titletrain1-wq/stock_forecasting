@@ -37,6 +37,18 @@ class Settings(BaseSettings):
     live_fragment_refresh_crypto_sec: int = 2
     live_fragment_refresh_equity_sec: int = 15
 
+    # --- Intraday forecasting subsystem (crypto 1h/4h, separate from daily core) ---
+    intraday_forecast_enabled: bool = True
+    intraday_lookback_days: int = 365  # training window (god ruling F3)
+    intraday_bars_history_retention_days: int = 365  # immutable ML store (F2)
+    intraday_forecast_writer_interval_seconds: int = 3600  # hourly worker job
+    intraday_evaluator_interval_seconds: int = 3600  # hourly grading job
+    intraday_forecast_opacity: float = 0.6
+    intraday_forecast_color_1h: str = "#FF8C00"  # orange
+    intraday_forecast_color_4h: str = "#9932CC"  # purple
+    intraday_ci_level: float = 0.95  # 95% confidence bands
+    intraday_model_dir: str = "./models/intraday"
+
 
 @lru_cache
 def get_settings() -> Settings:
