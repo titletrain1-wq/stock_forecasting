@@ -14,7 +14,7 @@ import streamlit as st
 from sqlmodel import Session, select
 
 from stock_forecasting.config import get_settings
-from stock_forecasting.database import create_tables, get_engine
+from stock_forecasting.database import create_tables, get_engine, seed_watchlist
 from stock_forecasting.health_view import build_health_view
 from stock_forecasting.intraday_store import IntradayRepository, LiveQuoteRepository
 from stock_forecasting.panels import (
@@ -343,6 +343,7 @@ def main() -> None:
     st.set_page_config(layout="wide", page_title="Stock Forecasting")
     engine = get_engine()
     create_tables(engine)  # self-bootstrap schema on a fresh deploy
+    seed_watchlist(engine)  # ensure the configured watchlist exists
 
     tickers = load_tickers(engine)
     render_sidebar(engine, tickers)

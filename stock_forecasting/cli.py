@@ -43,6 +43,14 @@ def run_once() -> None:
         logger.exception("Could not construct WorkerScheduler - aborting")
         sys.exit(1)
 
+    try:
+        from stock_forecasting.database import seed_watchlist
+
+        n = seed_watchlist(scheduler.engine)
+        logger.info("Watchlist seed: %d ticker(s) added", n)
+    except Exception:
+        logger.exception("Watchlist seed failed (continuing)")
+
     # Run each job independently: a single provider/data failure must not
     # abort the whole pass or block the heartbeat. Serverless-friendly.
     jobs = [

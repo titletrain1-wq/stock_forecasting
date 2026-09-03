@@ -1,6 +1,6 @@
 streamlit>=1.40
 sqlmodel>=0.0.20
-sqlalchemy-libsql
+libsql>=0.1.11
 pandas>=2.2
 numpy>=1.26
 scikit-learn>=1.5
