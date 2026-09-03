@@ -21,8 +21,8 @@ try:  # pragma: no cover - only meaningful on Streamlit Cloud
         if isinstance(_v, str):
             os.environ.setdefault(_k, _v)
 except Exception:  # noqa: BLE001
-    pass
+    _ = None  # secrets bridge is best-effort
 
-from stock_forecasting.app import main  # noqa: E402
+from stock_forecasting.app import main
 
 main()
