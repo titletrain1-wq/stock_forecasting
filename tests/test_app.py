@@ -74,6 +74,19 @@ def test_render_price_header_handles_empty_and_populated() -> None:
     ]
     app.render_price_header("AAPL", bars)
 
+    # A live quote overrides the last close in the price tile.
+    captured: list = []
+    cols = [
+        SimpleNamespace(metric=lambda *a, **k: captured.append(a)) for _ in range(3)
+    ]
+    _st.columns.side_effect = lambda spec: cols
+    quotes = [SimpleNamespace(ts="2026-02-02T15:30:00Z", price=123.45)]
+    app.render_price_header("AAPL", bars, quotes)
+    _st.columns.side_effect = lambda spec: [
+        MagicMock() for _ in range(spec if isinstance(spec, int) else len(spec))
+    ]
+    assert any("$123.45" in a[1] for a in captured)
+
 
 def test_load_accuracy_records_scoped(temp_db) -> None:
     from sqlmodel import Session

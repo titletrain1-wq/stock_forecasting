@@ -166,16 +166,22 @@ def render_sidebar(engine, tickers: list[Ticker]) -> None:
             st.rerun()
 
 
-def render_price_header(symbol: str, bars: list[OhlcvBar]) -> None:
-    """Symbol · latest price · % change from previous close."""
+def render_price_header(symbol: str, bars: list[OhlcvBar], quotes=None) -> None:
+    """Symbol · latest price · % change from previous close.
+
+    ``quotes`` (optional) is the live-quote sequence; when present the price tile
+    shows the latest live tick instead of the last daily close.
+    """
     if not bars:
         st.subheader(f"{symbol} — no bars ingested yet")
         return
     last = bars[-1]
     prev_close = bars[-2].close if len(bars) > 1 else last.close
-    pct = ((last.close - prev_close) / prev_close * 100.0) if prev_close else 0.0
+    quote = quotes[-1] if quotes else None
+    price = quote.price if quote is not None else last.close
+    pct = ((price - prev_close) / prev_close * 100.0) if prev_close else 0.0
     col1, col2, col3 = st.columns(3)
-    col1.metric(symbol, f"${last.close:,.2f}", f"{pct:+.2f}%")
+    col1.metric(symbol, f"${price:,.2f}", f"{pct:+.2f}%")
     col2.metric("Latest bar", last.ts[:10])
     col3.metric("Bars in range", str(len(bars)))
 
@@ -205,42 +211,49 @@ def render_chart_panel(engine, symbol: str, ticker: Ticker) -> None:
 
     bars = load_bars(engine, symbol, RANGE_DAYS[range_label])
     snapshots = load_snapshots(engine, symbol)
+    quotes, intraday = load_live(engine, symbol, ticker.asset_class)
 
-    def _live_region() -> None:
-        """Price header + streaming chart — re-executed on the fragment tick.
+    def _live_header() -> None:
+        """Live price header — the ONLY thing that re-runs on the fragment tick.
 
-        Only this function re-runs (Spec §3.1): the range/overlay controls above
-        and the panels below keep their state and scroll position.
+        The actual+forecast chart is deliberately NOT in here: Streamlit re-mounts
+        an ``st.plotly_chart`` on every ``run_every`` tick (no in-place
+        ``Plotly.react``), which throws away the viewer's zoom / pan and makes the
+        chart impossible to study while it refreshes. The chart is rendered once
+        per interaction below; only this lightweight header chases the live quote.
         """
-        quotes, intraday = load_live(engine, symbol, ticker.asset_class)
-        render_price_header(symbol, bars)
+        q, _intraday = load_live(engine, symbol, ticker.asset_class)
+        render_price_header(symbol, bars, q)
         badge = _delayed_badge(ticker.asset_class)
         if badge:
             st.caption(badge)
-        fig = build_price_figure(
-            bars,
-            snapshots,
-            ribbon_horizon=None if ribbon_horizon == "(none)" else ribbon_horizon,
-            show_markers=show_markers,
-            show_actual_candles=use_candles,
-            latest_horizons=tuple(latest_horizons),
-            title=f"{symbol} · actual vs forecast",
-            uirevision=f"{symbol}:{range_label}",
-            show_sma=show_sma,
-            show_bollinger=show_bollinger,
-            show_rsi=show_rsi,
-            show_macd=show_macd,
-            show_volume=show_volume,
-        )
-        add_live_price_line(fig, quotes, intraday)
-        # Stable key -> Streamlit reuses the existing Plotly canvas instead of
-        # remounting it, so ticks update in place without flicker (Spec §3.1).
-        st.plotly_chart(fig, use_container_width=True, key="live_price_chart")
-        # M6: calibration disclaimer — the CI band is anchored to P_close, never
-        # the live price. Also on the figure itself and in KNOWN_LIMITATIONS.md.
-        st.caption(CI_DISCLAIMER)
 
-    st.fragment(_live_region, run_every=_refresh_for(ticker.asset_class))()
+    st.fragment(_live_header, run_every=_refresh_for(ticker.asset_class))()
+
+    fig = build_price_figure(
+        bars,
+        snapshots,
+        ribbon_horizon=None if ribbon_horizon == "(none)" else ribbon_horizon,
+        show_markers=show_markers,
+        show_actual_candles=use_candles,
+        latest_horizons=tuple(latest_horizons),
+        title=f"{symbol} · actual vs forecast",
+        uirevision=f"{symbol}:{range_label}",
+        show_sma=show_sma,
+        show_bollinger=show_bollinger,
+        show_rsi=show_rsi,
+        show_macd=show_macd,
+        show_volume=show_volume,
+    )
+    add_live_price_line(fig, quotes, intraday)
+    # Stable key so a control change (range / overlay toggle) redraws in place and
+    # keeps the current zoom. The live line here is as-of the last full rerun; it
+    # advances when you touch a control or reload, not on a timer — a deliberate
+    # trade so the chart stays steady enough to read.
+    st.plotly_chart(fig, use_container_width=True, key="live_price_chart")
+    # M6: calibration disclaimer — the CI band is anchored to P_close, never
+    # the live price. Also on the figure itself and in KNOWN_LIMITATIONS.md.
+    st.caption(CI_DISCLAIMER)
 
 
 def render_accuracy_panel(engine, symbol: str) -> None:

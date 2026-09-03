@@ -78,13 +78,28 @@ def test_empty_inputs_return_figure_with_no_data_annotation() -> None:
 
 def test_uirevision_defaults_true_and_is_overridable() -> None:
     # Default keeps zoom/pan stable across live-tick refreshes.
-    assert build_price_figure(BARS, []).layout.uirevision is True
+    fig = build_price_figure(BARS, [])
+    assert fig.layout.uirevision is True
+    assert fig.layout.xaxis.uirevision is True
+    assert fig.layout.yaxis.uirevision is True
     # App passes "<symbol>:<range>" so a ticker/range switch forces Plotly to
     # redraw instead of freezing on the previous series.
-    assert (
-        build_price_figure(BARS, [], uirevision="AAPL:6M").layout.uirevision
-        == "AAPL:6M"
-    )
+    fig2 = build_price_figure(BARS, [], uirevision="AAPL:6M")
+    assert fig2.layout.uirevision == "AAPL:6M"
+    assert fig2.layout.xaxis.uirevision == "AAPL:6M"
+
+
+def test_every_trace_has_a_stable_uid() -> None:
+    # Deterministic uids let Plotly.react() match traces across a figure rebuild
+    # instead of remounting them (which drops the viewer's zoom/pan).
+    f1 = build_price_figure(BARS, [])
+    f2 = build_price_figure(BARS, [])
+    uids1 = [t.uid for t in f1.data]
+    assert len(uids1) > 3
+    assert all(uids1)
+    assert len(uids1) == len(set(uids1))
+    # Same inputs -> identical uid sequence (stable across rebuilds).
+    assert uids1 == [t.uid for t in f2.data]
 
 
 def test_actual_close_line_present() -> None:

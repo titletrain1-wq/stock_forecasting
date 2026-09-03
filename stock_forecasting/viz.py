@@ -566,6 +566,12 @@ def build_price_figure(
     # Disable rangeslider for candlestick traces (compress the pane stack)
     fig.update_xaxes(rangeslider={"visible": False})
 
+    # Pin uirevision on every (sub-pane) axis too, not just the layout default,
+    # so a live-refresh rebuild of this make_subplots figure keeps the viewer's
+    # zoom / pan on all panes.
+    fig.update_xaxes(uirevision=uirevision)
+    fig.update_yaxes(uirevision=uirevision)
+
     # M6 overlay-integrity fence: the calibration disclaimer rides on every
     # figure. The band stays P_close-anchored; live ticks only move the "live"
     # line added by add_live_price_line.
@@ -592,7 +598,32 @@ def build_price_figure(
             font={"size": 14},
         )
 
+    _assign_stable_uids(fig)
     return fig
+
+
+def _assign_stable_uids(fig: go.Figure) -> None:
+    """Give every trace a deterministic ``uid``.
+
+    The live-price fragment rebuilds this whole figure on every refresh tick. With
+    no ``uid`` Plotly assigns a fresh random one each rebuild, so ``Plotly.react``
+    cannot match the new traces to the old ones and remounts them — which throws
+    away the viewer's zoom / pan even though ``layout.uirevision`` is constant.
+    A stable uid keyed to the trace's role lets react update the data in place and
+    keep the current view. ``add_live_price_line`` sets its own ("live"/"forming").
+    """
+    counts: dict[str, int] = {}
+    for tr in fig.data:
+        meta = getattr(tr, "meta", None)
+        if isinstance(meta, dict) and meta.get("kind"):
+            base = str(meta["kind"])
+            if meta.get("horizon"):
+                base = f"{base}_{meta['horizon']}"
+        else:
+            base = tr.name or type(tr).__name__
+        base = str(base).replace(" ", "_").lower()
+        counts[base] = counts.get(base, 0) + 1
+        tr.uid = f"{base}_{counts[base]}"
 
 
 def add_live_price_line(
@@ -634,6 +665,7 @@ def add_live_price_line(
             line={"color": LIVE_COLOR, "width": 2},
             hovertemplate="%{x}<br>live %{y:.2f}<extra></extra>",
             meta={"kind": "live"},
+            uid="live",
         )
     )
 
@@ -667,6 +699,7 @@ def add_live_price_line(
             line={"width": 1},
             hovertext="forming bucket — provisional (is_provisional=1)",
             meta={"kind": "forming"},
+            uid="forming",
         )
     )
     return fig
