@@ -565,37 +565,57 @@ def test_active_provider_filter_detects_crypto_outage(db_session: Session) -> No
 
 
 def test_stale_provider_errors_suppressed(db_session: Session) -> None:
-    """Stale providers (no recent job heartbeat) should have errors suppressed from checks.
+    """Non-active providers (no recent job heartbeat) should have errors suppressed from checks.
 
-    This test verifies the intended behavior: when a provider has no active job heartbeat
-    (is stale/dormant), its LinkMetrics errors should NOT trigger degradation.
-    Only actively-polled providers contribute to health status.
+    This test verifies the intended behavior: when a provider has no active job heartbeat,
+    its LinkMetrics errors should NOT trigger degradation. Only actively-polled providers
+    contribute to health status. This is the actual filter suppression behavior.
+
+    Setup: active job_ingest_equities job (yfinance active) + failing coingecko (no active crypto job).
+    Expected: coingecko's errors suppressed -> NOMINAL.
     """
     now = datetime(2026, 9, 1, 12, 0, 0, tzinfo=UTC)
     now_iso = now.isoformat()
 
-    # Create an old (stale) job heartbeat for coingecko (last pulse > 60m ago)
-    stale_job = SystemHeartbeat(
-        job_type="job_ingest_crypto",
+    # Create an active job_ingest_equities heartbeat (equities job is active)
+    active_equities_job = SystemHeartbeat(
+        job_type="job_ingest_equities",
         worker_pid=1234,
-        last_pulse_ts=(now - timedelta(hours=2)).isoformat(),  # Stale
-        last_success_ts=(now - timedelta(hours=2)).isoformat(),
+        last_pulse_ts=(now - timedelta(minutes=5)).isoformat(),  # Active
+        last_success_ts=(now - timedelta(minutes=5)).isoformat(),
         consecutive_failures=0,
     )
-    db_session.add(stale_job)
+    db_session.add(active_equities_job)
 
-    # Create failing coingecko LinkMetrics row (but job is stale, so should be suppressed)
+    # Create healthy yfinance LinkMetrics row (yfinance is in active equities set)
+    healthy_metric = LinkMetrics(
+        provider="yfinance",  # lowercase, active in equities job
+        rtt_p50_ms=200.0,
+        rtt_p95_ms=400.0,
+        rtt_jitter_ms=100.0,
+        error_rate=0.0,
+        consecutive_failures=0,
+        breaker_state="closed",
+        calls_today=50,
+        daily_limit=1000,
+        quota_pct=0.05,
+        updated_at=now_iso,
+    )
+    db_session.add(healthy_metric)
+
+    # Create FAILING coingecko LinkMetrics row (coingecko NOT in active equities set)
+    # This provider's errors should be SUPPRESSED because no active crypto job
     failing_metric = LinkMetrics(
-        provider="coingecko",  # lowercase
-        rtt_p50_ms=1000.0,
-        rtt_p95_ms=2000.0,
-        rtt_jitter_ms=500.0,
+        provider="coingecko",  # lowercase, but no active crypto job
+        rtt_p50_ms=5000.0,
+        rtt_p95_ms=10000.0,
+        rtt_jitter_ms=3000.0,
         error_rate=0.9,  # 90% failure rate
         consecutive_failures=8,
         breaker_state="open",  # Circuit open
         calls_today=100,
         daily_limit=1000,
-        quota_pct=0.5,
+        quota_pct=0.9,
         updated_at=now_iso,
     )
     db_session.add(failing_metric)
@@ -603,10 +623,15 @@ def test_stale_provider_errors_suppressed(db_session: Session) -> None:
 
     checker = HealthChecker(db_session)
 
-    # Since job_ingest_crypto is stale, no active providers -> fallback to all_metrics
-    # But we have only coingecko which is failing. The check should reflect this.
-    # The fallback fires when active_providers is non-empty but filtered is empty.
-    # Here, active_providers is EMPTY (job is stale), so we use all_metrics = [coingecko failed]
-    error_result = checker.check_error_rate()
-    # With no active jobs, we fall back to all metrics, so coingecko's failure is visible
-    assert error_result.status in ["DEGRADED", "CRITICAL"]
+    # active_providers = {yfinance, tiingo, finnhub, fake} (from active job_ingest_equities)
+    # Filter removes coingecko, leaving only [yfinance] which is healthy
+    # Coingecko's errors are suppressed -> all checks return NOMINAL
+    error_result = checker.check_error_rate(now=now)
+    assert error_result.status == "NOMINAL", f"Inactive coingecko errors should be suppressed. Got: {error_result.message}"
+    assert "yfinance" in error_result.details
+
+    latency_result = checker.check_latency(now=now)
+    assert latency_result.status == "NOMINAL", "Inactive coingecko latency should be suppressed"
+
+    quota_result = checker.check_quota(now=now)
+    assert quota_result.status == "NOMINAL", "Inactive coingecko quota should be suppressed"

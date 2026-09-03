@@ -46,7 +46,7 @@ def _parse_utc(ts_str: str) -> datetime:
     return dt.astimezone(UTC)
 
 
-def _get_active_providers(session: Session, active_threshold_min: int = 60) -> set[str]:
+def _get_active_providers(session: Session, now: datetime | None = None, active_threshold_min: int = 60) -> set[str]:
     """Get the set of currently-active providers based on recent job heartbeats.
 
     A provider is considered active if it's used by a job that has pulsed within
@@ -55,12 +55,13 @@ def _get_active_providers(session: Session, active_threshold_min: int = 60) -> s
 
     Args:
         session: Database session
+        now: Current time for threshold calculation (defaults to UTC now)
         active_threshold_min: Threshold in minutes for considering a job "active"
 
     Returns:
         Set of provider names that are actively used by recent jobs
     """
-    now = datetime.now(UTC)
+    now = now or datetime.now(UTC)
     threshold = now - timedelta(minutes=active_threshold_min)
 
     # Get all job heartbeats
@@ -169,10 +170,11 @@ class HealthChecker:
 
         return HealthCheckResult("freshness", status, msg, details)
 
-    def check_latency(self) -> HealthCheckResult:
+    def check_latency(self, now: datetime | None = None) -> HealthCheckResult:
         """Check RTT latency metrics (p50 <800ms, p95 <2.5s, jitter <1.5s)."""
+        current_time = now or datetime.now(UTC)
         all_metrics = self.session.exec(select(LinkMetrics)).all()
-        active_providers = _get_active_providers(self.session)
+        active_providers = _get_active_providers(self.session, now=current_time)
 
         # If no active providers detected, use all metrics (fallback for setup/testing)
         if active_providers:
@@ -224,10 +226,11 @@ class HealthChecker:
         )
         return HealthCheckResult("latency", status, msg, details)
 
-    def check_error_rate(self) -> HealthCheckResult:
+    def check_error_rate(self, now: datetime | None = None) -> HealthCheckResult:
         """Check provider consecutive failures (>=3 degraded, >=5 down)."""
+        current_time = now or datetime.now(UTC)
         all_metrics = self.session.exec(select(LinkMetrics)).all()
-        active_providers = _get_active_providers(self.session)
+        active_providers = _get_active_providers(self.session, now=current_time)
 
         # If no active providers detected, use all metrics (fallback for setup/testing)
         if active_providers:
@@ -439,10 +442,11 @@ class HealthChecker:
             message="No future-dated bars detected.",
         )
 
-    def check_quota(self) -> HealthCheckResult:
+    def check_quota(self, now: datetime | None = None) -> HealthCheckResult:
         """Check API provider daily quota usage (>=0.8 degraded, >=0.95 critical)."""
+        current_time = now or datetime.now(UTC)
         all_metrics = self.session.exec(select(LinkMetrics)).all()
-        active_providers = _get_active_providers(self.session)
+        active_providers = _get_active_providers(self.session, now=current_time)
 
         # If no active providers detected, use all metrics (fallback for setup/testing)
         if active_providers:
