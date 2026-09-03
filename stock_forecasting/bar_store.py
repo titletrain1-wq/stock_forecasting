@@ -102,12 +102,24 @@ class BarRepository:
                 valid_bars.append(bar)
 
         if valid_bars:
-            # Single idempotent upsert for the whole batch. INSERT .. ON CONFLICT
-            # avoids (a) the read-then-write race, (b) a large `ts IN (...)`
-            # pre-check query, and (c) SQLAlchemy's RETURNING-based batch insert,
-            # which libSQL/Turso rejects on a duplicate and which then poisons
-            # the session for every later ticker. Chunked so one request stays
-            # small over a remote (Turso) connection.
+            # How many are genuinely new (return value / logging only).
+            existing_ts = {
+                row
+                for row in self.session.exec(
+                    select(OhlcvBar.ts).where(
+                        OhlcvBar.ticker == ticker,
+                        OhlcvBar.interval == interval,
+                        OhlcvBar.ts.in_([b.ts for b in valid_bars]),
+                    )
+                ).all()
+            }
+            new_count = sum(1 for b in valid_bars if b.ts not in existing_ts)
+
+            # Single idempotent upsert. INSERT .. ON CONFLICT avoids the
+            # read-then-write race and SQLAlchemy's RETURNING-based batch
+            # insert, which libSQL/Turso rejects on a duplicate and which then
+            # poisons the session for every later ticker. Chunked so one
+            # request stays small over a remote (Turso) connection.
             stmt = text(
                 "INSERT INTO ohlcv_bars "
                 "(ticker, interval, ts, open, high, low, close, adj_close, "
@@ -142,7 +154,7 @@ class BarRepository:
                         for b in valid_bars[start : start + chunk]
                     ],
                 )
-            inserted_count = len(valid_bars)
+            inserted_count = new_count
 
         self.session.commit()
         return inserted_count
