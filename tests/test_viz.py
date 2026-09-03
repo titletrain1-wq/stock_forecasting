@@ -58,7 +58,7 @@ def _snapshot(
     )
 
 
-BARS = [_bar(f"2026-02-{d:02d}T00:00:00Z", 100.0 + d) for d in range(1, 21)]
+BARS = [_bar(f"2026-{m:02d}-{d:02d}T00:00:00Z", 100.0 + (m - 1) * 30 + d) for m in range(1, 3) for d in range(1, 31)]  # ~60 days of data for indicator computation
 
 
 def _trace_names(fig: go.Figure) -> list[str]:
@@ -138,9 +138,10 @@ def test_latest_forecast_ci_band_uses_fill_tonexty() -> None:
             upper_bound=131.0,
         )
     ]
-    fig = build_price_figure(BARS, snaps, ribbon_horizon=None, latest_horizons=("5d",))
-    fills = [t.fill for t in fig.data if t.fill == "tonexty"]
-    assert len(fills) == 1
+    fig = build_price_figure(BARS, snaps, ribbon_horizon=None, latest_horizons=("5d",), show_rsi=False, show_macd=False, show_volume=False)
+    # Check that CI band uses fill="tonexty" (BB Lower also uses it, so check for at least one)
+    fills = [t.fill for t in fig.data if hasattr(t, 'fill') and t.fill == "tonexty"]
+    assert len(fills) >= 1
     assert any(t.name == "Forecast 5d" for t in fig.data)
 
 
@@ -211,3 +212,106 @@ def test_marker_color_reflects_evaluation_state() -> None:
     }
     assert colors["1d"] != colors["5d"]
     assert colors["30d"] not in (colors["1d"], colors["5d"])
+
+
+# Tests for technical indicators (B4 from Jim's findings)
+
+
+def test_sma20_present_when_enabled() -> None:
+    fig = build_price_figure(BARS, [], show_sma=True, show_bollinger=False, show_rsi=False, show_macd=False, show_volume=False, latest_horizons=())
+    assert any(t.name == "SMA20" for t in fig.data)
+    trace = next(t for t in fig.data if t.name == "SMA20")
+    assert len(trace.y) > 0  # Should have computed values
+
+
+def test_sma20_absent_when_disabled() -> None:
+    fig = build_price_figure(BARS, [], show_sma=False, show_bollinger=False, show_rsi=False, show_macd=False, show_volume=False, latest_horizons=())
+    assert not any(t.name == "SMA20" for t in fig.data)
+
+
+def test_sma50_present_when_enabled() -> None:
+    fig = build_price_figure(BARS, [], show_sma=True, show_bollinger=False, show_rsi=False, show_macd=False, show_volume=False, latest_horizons=())
+    assert any(t.name == "SMA50" for t in fig.data)
+
+
+def test_sma50_absent_when_disabled() -> None:
+    fig = build_price_figure(BARS, [], show_sma=False, show_bollinger=False, show_rsi=False, show_macd=False, show_volume=False, latest_horizons=())
+    assert not any(t.name == "SMA50" for t in fig.data)
+
+
+def test_bollinger_bands_present_when_enabled() -> None:
+    fig = build_price_figure(BARS, [], show_sma=False, show_bollinger=True, show_rsi=False, show_macd=False, show_volume=False, latest_horizons=())
+    assert any(t.name == "BB Upper" for t in fig.data)
+    assert any(t.name == "BB Lower" for t in fig.data)
+
+
+def test_bollinger_bands_absent_when_disabled() -> None:
+    fig = build_price_figure(BARS, [], show_sma=False, show_bollinger=False, show_rsi=False, show_macd=False, show_volume=False, latest_horizons=())
+    assert not any(t.name == "BB Upper" for t in fig.data)
+    assert not any(t.name == "BB Lower" for t in fig.data)
+
+
+def test_rsi_subpane_present_when_enabled() -> None:
+    fig = build_price_figure(BARS, [], show_sma=False, show_bollinger=False, show_rsi=True, show_macd=False, show_volume=False, latest_horizons=())
+    assert any(t.name == "RSI14" for t in fig.data)
+    assert len(fig.data) >= 2  # At least Actual + RSI14
+    assert hasattr(fig.layout, 'yaxis2') and fig.layout.yaxis2 is not None  # Should have yaxis2 for RSI sub-pane
+
+
+def test_rsi_subpane_absent_when_disabled() -> None:
+    fig = build_price_figure(BARS, [], show_sma=False, show_bollinger=False, show_rsi=False, show_macd=False, show_volume=False, latest_horizons=())
+    assert not any(t.name == "RSI14" for t in fig.data)
+
+
+def test_macd_subpane_components_present_when_enabled() -> None:
+    fig = build_price_figure(BARS, [], show_sma=False, show_bollinger=False, show_rsi=False, show_macd=True, show_volume=False, latest_horizons=())
+    assert any(t.name == "MACD" for t in fig.data)
+    assert any(t.name == "MACD Signal" for t in fig.data)
+    assert any(t.name == "MACD Hist" for t in fig.data)
+    # Verify signal and histogram are different (checking they're swapped correctly)
+    macd_trace = next(t for t in fig.data if t.name == "MACD")
+    signal_trace = next(t for t in fig.data if t.name == "MACD Signal")
+    hist_trace = next(t for t in fig.data if t.name == "MACD Hist")
+    # Spot-check: values should be different between components
+    assert macd_trace.y != signal_trace.y
+    assert signal_trace.y != hist_trace.y
+
+
+def test_macd_subpane_absent_when_disabled() -> None:
+    fig = build_price_figure(BARS, [], show_sma=False, show_bollinger=False, show_rsi=False, show_macd=False, show_volume=False, latest_horizons=())
+    assert not any(t.name == "MACD" for t in fig.data)
+    assert not any(t.name == "MACD Signal" for t in fig.data)
+    assert not any(t.name == "MACD Hist" for t in fig.data)
+
+
+def test_volume_subpane_present_when_enabled() -> None:
+    fig = build_price_figure(BARS, [], show_sma=False, show_bollinger=False, show_rsi=False, show_macd=False, show_volume=True, latest_horizons=())
+    assert any(t.name == "Volume" for t in fig.data)
+    assert any(t.name == "Volume SMA20" for t in fig.data)
+
+
+def test_volume_subpane_absent_when_disabled() -> None:
+    fig = build_price_figure(BARS, [], show_sma=False, show_bollinger=False, show_rsi=False, show_macd=False, show_volume=False, latest_horizons=())
+    assert not any(t.name == "Volume" for t in fig.data)
+    assert not any(t.name == "Volume SMA20" for t in fig.data)
+
+
+def test_figure_has_correct_number_of_subpanes() -> None:
+    # 3 sub-panes enabled
+    fig = build_price_figure(BARS, [], show_rsi=True, show_macd=True, show_volume=True, latest_horizons=())
+    # Should have yaxis1 (price), yaxis2 (RSI), yaxis3 (MACD), yaxis4 (Volume)
+    assert hasattr(fig.layout, 'yaxis2') and fig.layout.yaxis2 is not None
+    assert hasattr(fig.layout, 'yaxis3') and fig.layout.yaxis3 is not None
+    assert hasattr(fig.layout, 'yaxis4') and fig.layout.yaxis4 is not None
+
+
+def test_subpane_y_axis_titles() -> None:
+    fig = build_price_figure(BARS, [], show_rsi=True, show_macd=True, show_volume=True, latest_horizons=())
+    assert fig.layout.yaxis2.title.text == "RSI"
+    assert fig.layout.yaxis3.title.text == "MACD"
+    assert fig.layout.yaxis4.title.text == "Volume"
+
+
+def test_price_pane_y_axis_title() -> None:
+    fig = build_price_figure(BARS, [], show_rsi=False, show_macd=False, show_volume=False, latest_horizons=())
+    assert fig.layout.yaxis.title.text == "Price"

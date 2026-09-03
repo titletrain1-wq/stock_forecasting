@@ -26,6 +26,7 @@ from typing import Any, Protocol
 import pandas as pd
 import pandas_ta as ta
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 ACTUAL_COLOR = "#2962FF"
 RIBBON_COLOR = "#FF6D00"
@@ -131,12 +132,12 @@ def _compute_indicators(bars: list[_BarLike]) -> dict[str, Any]:
         # RSI sub-pane
         result['rsi'] = ta.rsi(df['close'], length=14).tolist()
 
-        # MACD sub-pane
+        # MACD sub-pane (columns: [MACD, MACDh(histogram), MACDs(signal)])
         macd = ta.macd(df['close'], fast=12, slow=26, signal=9)
         if macd is not None and len(macd.columns) >= 3:
             result['macd_line'] = macd.iloc[:, 0].tolist()
-            result['macd_signal'] = macd.iloc[:, 1].tolist()
-            result['macd_hist'] = macd.iloc[:, 2].tolist()
+            result['macd_hist'] = macd.iloc[:, 1].tolist()  # histogram is column 1
+            result['macd_signal'] = macd.iloc[:, 2].tolist()  # signal is column 2
 
         # Volume sub-pane
         result['volume'] = df['volume'].tolist()
@@ -196,11 +197,29 @@ def build_price_figure(
     Returns:
         A ``plotly.graph_objects.Figure``. Empty inputs yield an annotated blank figure.
     """
-    fig = go.Figure()
     horizons = tuple(latest_horizons)
 
     # Compute indicators once for the whole dataset
     indicators = _compute_indicators(list(bars)) if bars else {}
+
+    # Calculate number of sub-panes and create figure with make_subplots
+    num_subpanes = sum([show_rsi, show_macd, show_volume])
+    rows = 1 + num_subpanes  # 1 for price pane + one for each sub-pane
+    specs = [[{"secondary_y": False}]]  # Price pane (2D list)
+    for _ in range(num_subpanes):
+        specs.append([{"secondary_y": False}])  # Sub-panes
+
+    # Row heights: price pane gets more space, sub-panes share the rest
+    row_heights = [0.6] + ([0.13] * num_subpanes) if num_subpanes > 0 else [1.0]
+
+    fig = make_subplots(
+        rows=rows,
+        cols=1,
+        shared_xaxes=True,
+        specs=specs,
+        row_heights=row_heights,
+        vertical_spacing=0.05,
+    )
 
     if bars:
         b_sorted = sorted(bars, key=lambda b: str(b.ts))
@@ -216,7 +235,9 @@ def build_price_figure(
                     name="Actual",
                     increasing_line_color=HIT_COLOR,
                     decreasing_line_color=MISS_COLOR,
-                )
+                ),
+                row=1,
+                col=1,
             )
         else:
             fig.add_trace(
@@ -227,7 +248,9 @@ def build_price_figure(
                     mode="lines",
                     line={"color": ACTUAL_COLOR, "width": 2},
                     hovertemplate="%{x}<br>close %{y:.2f}<extra></extra>",
-                )
+                ),
+                row=1,
+                col=1,
             )
 
         # Add price-pane indicators (SMA, Bollinger)
@@ -242,7 +265,9 @@ def build_price_figure(
                         mode="lines",
                         line={"color": "rgba(200, 150, 100, 0.8)", "width": 1},
                         hovertemplate="%{x}<br>SMA20 %{y:.2f}<extra></extra>",
-                    )
+                    ),
+                    row=1,
+                    col=1,
                 )
             if show_sma and 'sma50' in indicators:
                 fig.add_trace(
@@ -253,7 +278,9 @@ def build_price_figure(
                         mode="lines",
                         line={"color": "rgba(150, 100, 200, 0.8)", "width": 1},
                         hovertemplate="%{x}<br>SMA50 %{y:.2f}<extra></extra>",
-                    )
+                    ),
+                    row=1,
+                    col=1,
                 )
             if show_bollinger and 'bb_upper' in indicators:
                 fig.add_trace(
@@ -264,7 +291,9 @@ def build_price_figure(
                         mode="lines",
                         line={"color": "rgba(100, 100, 200, 0.5)", "width": 1, "dash": "dot"},
                         hovertemplate="%{x}<br>BB Upper %{y:.2f}<extra></extra>",
-                    )
+                    ),
+                    row=1,
+                    col=1,
                 )
                 fig.add_trace(
                     go.Scatter(
@@ -276,7 +305,9 @@ def build_price_figure(
                         fill="tonexty",
                         fillcolor="rgba(100, 100, 200, 0.1)",
                         hovertemplate="%{x}<br>BB Lower %{y:.2f}<extra></extra>",
-                    )
+                    ),
+                    row=1,
+                    col=1,
                 )
 
     if ribbon_horizon:
@@ -297,7 +328,9 @@ def build_price_figure(
                         "target %{x}<br>predicted %{y:.2f}"
                         f"<br>{ribbon_horizon} model<extra></extra>"
                     ),
-                )
+                ),
+                row=1,
+                col=1,
             )
 
     if show_markers:
@@ -323,7 +356,9 @@ def build_price_figure(
                         f"<br>predicted {snap.predicted_price:.2f} · realized {realized}"
                         "<extra></extra>"
                     ),
-                )
+                ),
+                row=1,
+                col=1,
             )
 
     latest = _latest_per_horizon(snapshots, horizons)
@@ -343,7 +378,9 @@ def build_price_figure(
                 showlegend=False,
                 hoverinfo="skip",
                 meta={"kind": "ci_lower", "horizon": horizon},
-            )
+            ),
+            row=1,
+            col=1,
         )
         fig.add_trace(
             go.Scatter(
@@ -356,7 +393,9 @@ def build_price_figure(
                 name=f"CI {horizon}",
                 hoverinfo="skip",
                 meta={"kind": "ci_upper", "horizon": horizon},
-            )
+            ),
+            row=1,
+            col=1,
         )
         fig.add_trace(
             go.Scatter(
@@ -371,19 +410,17 @@ def build_price_figure(
                     f"{horizon} forecast %{{y:.2f}}<br>"
                     f"CI [{snap.lower_bound:.2f}, {snap.upper_bound:.2f}]<extra></extra>"
                 ),
-            )
+            ),
+            row=1,
+            col=1,
         )
 
-    # Add sub-pane indicators (RSI, MACD, Volume) with secondary y-axes
-    num_subpanes = sum([show_rsi, show_macd, show_volume])
-    subpane_height = 150 if num_subpanes > 0 else 0
-    subpane_idx = 2  # Start at y2 (y1 is price pane)
-
+    # Add sub-pane indicators (RSI, MACD, Volume)
     if indicators and 'ts' in indicators:
         ts = indicators['ts']
+        subpane_row = 2  # Start at row 2 (row 1 is price pane)
 
         if show_rsi and 'rsi' in indicators:
-            yaxis_name = f"yaxis{subpane_idx}"
             fig.add_trace(
                 go.Scatter(
                     x=ts,
@@ -391,18 +428,23 @@ def build_price_figure(
                     name="RSI14",
                     mode="lines",
                     line={"color": "rgba(100, 200, 100, 0.8)", "width": 1},
-                    yaxis=yaxis_name,
                     hovertemplate="%{x}<br>RSI %{y:.1f}<extra></extra>",
-                )
+                ),
+                row=subpane_row,
+                col=1,
             )
-            # Add 70/30 guide lines
+            # Add 70/30 guide lines using add_shape
             for level, level_name in [(70, "70"), (30, "30")]:
-                fig.add_hline(y=level, line_dash="dash", line_color="rgba(100, 200, 100, 0.3)",
-                              annotation_text=level_name, yaxis=yaxis_name)
-            subpane_idx += 1
+                fig.add_hline(
+                    y=level,
+                    line_dash="dash",
+                    line_color="rgba(100, 200, 100, 0.3)",
+                    row=subpane_row,
+                    col=1,
+                )
+            subpane_row += 1
 
         if show_macd and 'macd_line' in indicators:
-            yaxis_name = f"yaxis{subpane_idx}"
             fig.add_trace(
                 go.Scatter(
                     x=ts,
@@ -410,9 +452,10 @@ def build_price_figure(
                     name="MACD",
                     mode="lines",
                     line={"color": "rgba(200, 100, 100, 0.8)", "width": 1},
-                    yaxis=yaxis_name,
                     hovertemplate="%{x}<br>MACD %{y:.4f}<extra></extra>",
-                )
+                ),
+                row=subpane_row,
+                col=1,
             )
             fig.add_trace(
                 go.Scatter(
@@ -421,9 +464,10 @@ def build_price_figure(
                     name="MACD Signal",
                     mode="lines",
                     line={"color": "rgba(150, 100, 150, 0.8)", "width": 1},
-                    yaxis=yaxis_name,
                     hovertemplate="%{x}<br>Signal %{y:.4f}<extra></extra>",
-                )
+                ),
+                row=subpane_row,
+                col=1,
             )
             fig.add_trace(
                 go.Bar(
@@ -431,24 +475,25 @@ def build_price_figure(
                     y=indicators['macd_hist'],
                     name="MACD Hist",
                     marker={"color": ["green" if h >= 0 else "red" for h in indicators['macd_hist']]},
-                    yaxis=yaxis_name,
                     hovertemplate="%{x}<br>Hist %{y:.4f}<extra></extra>",
                     showlegend=False,
-                )
+                ),
+                row=subpane_row,
+                col=1,
             )
-            subpane_idx += 1
+            subpane_row += 1
 
         if show_volume and 'volume' in indicators:
-            yaxis_name = f"yaxis{subpane_idx}"
             fig.add_trace(
                 go.Bar(
                     x=ts,
                     y=indicators['volume'],
                     name="Volume",
                     marker={"color": "rgba(100, 100, 200, 0.5)"},
-                    yaxis=yaxis_name,
                     hovertemplate="%{x}<br>Vol %{y:.0f}<extra></extra>",
-                )
+                ),
+                row=subpane_row,
+                col=1,
             )
             if 'volume_sma' in indicators:
                 fig.add_trace(
@@ -458,37 +503,32 @@ def build_price_figure(
                         name="Volume SMA20",
                         mode="lines",
                         line={"color": "rgba(100, 100, 200, 0.9)", "width": 1},
-                        yaxis=yaxis_name,
                         hovertemplate="%{x}<br>Vol SMA %{y:.0f}<extra></extra>",
-                    )
+                    ),
+                    row=subpane_row,
+                    col=1,
                 )
-            subpane_idx += 1
 
-    layout: dict[str, Any] = {
-        "title": title,
-        "xaxis_title": "Date",
-        "yaxis_title": "Price",
-        "hovermode": "x unified",
-        "legend": {"orientation": "h", "yanchor": "bottom", "y": 1.02},
-        "margin": {"l": 50, "r": 20, "t": 50, "b": 40},
-        "xaxis": {"rangeslider": {"visible": False}},
-        "height": 480 + subpane_height,
-        # uirevision keeps zoom / pan / hover state across @st.fragment tick
-        # refreshes (M5 streaming chart) — without it every live update snaps
-        # the view back to the default range.
-        "uirevision": True,
+    # Update y-axis titles for sub-panes
+    subpane_titles = {
+        "yaxis2": "RSI" if show_rsi else None,
+        "yaxis3": "MACD" if show_macd else None,
+        "yaxis4": "Volume" if show_volume else None,
     }
 
-    # Configure secondary y-axes for sub-panes
-    for i in range(2, subpane_idx):
-        yaxis_key = f"yaxis{i}"
-        layout[yaxis_key] = {
-            "title": f"Axis {i - 1}",
-            "overlaying": "y",
-            "side": "right" if i % 2 == 0 else "left",
-        }
+    fig.update_yaxes(title_text="Price", row=1, col=1)
+    for row_idx, (yaxis_key, title) in enumerate(subpane_titles.items(), start=2):
+        if title:
+            fig.update_yaxes(title_text=title, row=row_idx, col=1)
 
-    fig.update_layout(**layout)
+    fig.update_layout(
+        title=title,
+        hovermode="x unified",
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02},
+        margin={"l": 50, "r": 20, "t": 50, "b": 40},
+        height=600 if num_subpanes > 0 else 480,
+        uirevision=True,  # uirevision keeps zoom / pan / hover state across @st.fragment tick refreshes
+    )
 
     # M6 overlay-integrity fence: the calibration disclaimer rides on every
     # figure. The band stays P_close-anchored; live ticks only move the "live"
