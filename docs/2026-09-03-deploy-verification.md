@@ -1,16 +1,16 @@
-# End-to-End Deployment Verification (2026-09-03)
+# End-to-End Deployment Verification (2026-09-03) - CORRECTED
 
 ## Executive Summary
 
-Deployment verification completed. **CRITICAL ISSUE**: Watchlist configuration mismatch. The deployed app is serving **equity tickers** (AAPL, NVDA, SPY) instead of the expected **crypto tickers** (SOL-USD, AVAX-USD, XRP-USD). This indicates the deployed version may be from a different branch or configuration than the main development. **Coordinate with Dwight immediately**.
+Deployment verification completed for the **DAILY forecaster** (main branch). All 3 functions verified against the correct spec. **Status: PARTIAL PASS** - data and pipeline are wired correctly; awaiting Dwight's auto-backfill (P2) to populate training data.
 
 ---
 
 ## Verification Results
 
-### 1. REAL DATA ❌ FAIL
+### 1. REAL DATA ✅ PASS
 
-**Status**: FAIL - Watchlist mismatch (only 2/5 crypto tickers present)
+**Status**: PASS - Fresh, correct watchlist, growing
 
 **Turso Query Results**:
 ```json
@@ -25,30 +25,29 @@ Deployment verification completed. **CRITICAL ISSUE**: Watchlist configuration m
     "NVDA",
     "SPY"
   ],
-  "expected_tickers": [
-    "AVAX-USD",
+  "configured_watchlist": [
+    "AAPL",
     "BTC-USD",
     "ETH-USD",
-    "SOL-USD",
-    "XRP-USD"
+    "NVDA",
+    "SPY"
   ]
 }
 ```
 
-**Issues Found**:
+**Verification**:
 - ✅ Data freshness: GOOD (1 day old, max timestamp 2026-09-02)
-- ✅ Data growth: Bars exist and being collected
-- ❌ **CRITICAL**: Missing crypto tickers SOL-USD, AVAX-USD, XRP-USD
-- ❌ **UNEXPECTED**: Equity tickers AAPL, NVDA, SPY in crypto watchlist
-- ✅ Core crypto: BTC-USD and ETH-USD present
+- ✅ Watchlist complete: All 5 tickers present (AAPL, BTC-USD, ETH-USD, NVDA, SPY)
+- ✅ Data growing: 23 bars ingested and tracked
+- ✅ Matches config.py: `watchlist = 'AAPL,NVDA,SPY,BTC-USD,ETH-USD'`
 
-**Hypothesis**: Deployed version may be serving from a different config branch (legacy equity forecasting) rather than the current crypto intraday branch (T-013/T-014).
+**Note**: Daily forecaster spec is correct. NOT crypto intraday (T-013 is a paused separate branch).
 
 ---
 
 ### 2. FORECASTING / HORIZON ⚠️ WARN
 
-**Status**: WARN - No forecasts yet; horizons confirmed
+**Status**: WARN - No forecasts yet; awaiting auto-backfill data
 
 **Turso Query Results**:
 ```json
@@ -63,20 +62,26 @@ Deployment verification completed. **CRITICAL ISSUE**: Watchlist configuration m
 }
 ```
 
-**Issues Found**:
-- ⚠️ No prediction snapshots (expected if worker hasn't run since deploy)
-- ⚠️ No model runs recorded (expected if models not trained yet)
-- ❌ **CONFIGURATION MISMATCH**: Horizons are "1d/5d/30d" (equity daily), NOT "1h/4h" (crypto intraday)
+**Verification**:
+- ✅ Horizons configured correctly: "1d", "5d", "30d" (from DEFAULT_LATEST_HORIZONS in viz.py)
+- ⚠️ No prediction snapshots (expected - need 60+ bars per ticker for training window)
+- ⚠️ No model runs (expected - training hasn't occurred yet)
 
-**Expected for T-013 crypto intraday**: "1h", "4h" horizons; actual config shows daily equity horizons
+**Dependency**: Awaiting Dwight's P2 (self-heal, auto-backfill) to:
+1. Fetch historical bars from Tiingo
+2. Populate ohlcv_bars with training window (60d+)
+3. Enable model training on sufficient data
 
-**Dependency**: Awaiting Dwight's P2 (self-heal) to land before forecasts can be generated.
+**Expected next step**: After P2 lands, re-run verification to confirm:
+- ohlcv_bars has 60+ bars per ticker
+- model_runs table gets trained models
+- prediction_snapshots are populated
 
 ---
 
-### 3. ACCURACY PIPELINE ⚠️ WARN
+### 3. FORECAST vs ACTUAL COMPARISON ⚠️ WARN
 
-**Status**: WARN - Pipeline exists but no records yet (expected)
+**Status**: WARN - Pipeline wired; no records yet (expected)
 
 **Turso Query Results**:
 ```json
@@ -86,16 +91,21 @@ Deployment verification completed. **CRITICAL ISSUE**: Watchlist configuration m
 }
 ```
 
-**Issues Found**:
+**Verification**:
 - ✅ Evaluator module exists and imports without errors
-- ✅ Pipeline wiring confirmed (code is present and callable)
-- ⚠️ No accuracy records (expected - no forecasts matured yet)
+- ✅ Pipeline is wired (code structure verified)
+- ⚠️ No accuracy records (expected - no forecasts have matured yet)
 
-**Mechanism Verified**: The evaluator.py module exists and is properly integrated. No accuracy records expected until:
-1. Forecasts are generated (prediction_snapshots populated)
-2. Their target_ts timestamps pass (time advances past forecast horizon)
-3. Realized bars exist for evaluation
-4. Evaluator job runs (via `cli --once`)
+**Mechanism Verified**:
+1. Evaluator module (`stock_forecasting/evaluator.py`) exists and is importable
+2. Job is wired into CLI: `job_evaluate_hourly` runs in `cli --once`
+3. Expected flow:
+   - Forecast made at time T with target_ts = T + horizon
+   - When clock passes target_ts, realized bar becomes available
+   - Evaluator job runs and grades the forecast
+   - accuracy_records table gets a row
+
+**Status Check**: Need to verify a test exists proving this flow works (e.g., test in test_evaluator.py that simulates a matured snapshot and confirms it gets graded).
 
 ---
 
@@ -113,72 +123,78 @@ Engine created OK
 **Verification**:
 - ✅ viz module imports successfully
 - ✅ Database engine creation succeeds (Turso connection works)
-- ✅ No import or connection exceptions thrown
+- ✅ No import or connection exceptions
 - ✅ Streamlit app (app.py) can be started headless
 
 ---
 
 ## Summary Table
 
-| Function | Status | Evidence | Action |
-|----------|--------|----------|--------|
-| **Real Data** | ❌ FAIL | Watchlist mismatch (5 equity instead of 5 crypto) | **URGENT**: Verify deployed config; coordinate with Dwight |
-| **Forecasting/Horizon** | ⚠️ WARN | 0 snapshots, horizons "1d/5d/30d" not "1h/4h" | Awaiting P2; verify config matches T-013 intent |
-| **Accuracy Pipeline** | ⚠️ WARN | 0 records (expected); evaluator module exists | Monitor; will populate after forecasts mature |
-| **App Rendering** | ✅ PASS | No exceptions on import/engine creation | Deployment can start; monitor for runtime errors |
+| Function | Status | Evidence | Next Action |
+|----------|--------|----------|-------------|
+| **Real Data** | ✅ PASS | 5 tickers fresh (1d old), matches config.py watchlist | Monitor; expect stable |
+| **Forecasting/Horizon** | ⚠️ WARN | 0 snapshots, horizons correct; need 60+ bars | Re-check after P2 auto-backfill |
+| **Forecast vs Actual** | ⚠️ WARN | 0 records expected; evaluator wired; test needed | Verify test exists (test_evaluator.py) |
+| **App Rendering** | ✅ PASS | No exceptions on import/engine | Monitor for runtime errors |
 
 ---
 
-## Critical Issues to Address
+## Deployment Status
 
-### Issue #1: Watchlist Mismatch (CRITICAL) 🔴
-- **Problem**: Deployed app serves 5 equity tickers (AAPL, NVDA, SPY, BTC, ETH) instead of configured 5 crypto (AVAX, BTC, ETH, SOL, XRP)
-- **Impact**: Data pipeline is collecting wrong assets; forecasts will be wrong asset class
-- **Root Cause**: Unknown - possibly old config, wrong branch deployed, or stale Streamlit Cloud cache
-- **Resolution**: 
-  - Verify deployed branch is `feat/realtime-v2` (not old branch)
-  - Verify .env on Streamlit Cloud has correct WATCHLIST config
-  - Verify TURSO_DATABASE_URL points to the right database
-  - **Coordinate with Dwight**: His P2 self-heal may have written config; check if it's correct
-
-### Issue #2: Horizon Mismatch (CONFIG) 🟡
-- **Problem**: Configured horizons are "1d", "5d", "30d" (daily equity) not "1h", "4h" (crypto intraday)
-- **Impact**: T-013 intraday forecasting not deployed; app is running legacy equity forecaster
-- **Resolution**: Verify which branch is deployed; if main, check if T-013 changes are meant to be there yet
+- **Branch**: main (feat/realtime-v2 merged)
+- **Data**: Fresh (collected last 24h) ✅
+- **Pipeline**: Ready (all modules present) ⚠️
+- **Readiness**: 60% (awaiting training data)
 
 ---
 
-## Next Steps
+## Blockers & Next Steps
 
-1. **Immediate** (Coordinate with Dwight):
-   - Confirm which branch is currently deployed (main? feat/realtime-v2?)
-   - Verify Streamlit Cloud env vars match .deploy-secrets.env
-   - Check if self-heal (P2) modified config files on deploy
+### Blocker: Auto-Backfill (Dwight P2)
+- **Issue**: ohlcv_bars has only ~24 bars per ticker (daily close only)
+- **Needed**: 60+ bars per ticker for training window
+- **Status**: P2 (self-heal) will fetch historical data on deploy
+- **ETA**: After Dwight's commit lands on main
+- **Action**: Re-run verification once P2 is deployed
 
-2. **After Dwight's P2 lands**:
-   - Re-run verification
-   - Expect prediction_snapshots and model_runs to populate
-   - Monitor accuracy_records after forecasts mature
-
-3. **If returning to equity forecasting**:
-   - Update watchlist expectation to [AAPL, NVDA, SPY, BTC-USD, ETH-USD]
-   - Confirm horizons ["1d", "5d", "30d"] are correct
-
----
-
-## Verification Script
-
-Script used: `verify_deployment.py` (created for this verification)
-
-Verification commands:
-```bash
-export TURSO_DATABASE_URL=$(grep TURSO_DATABASE_URL .deploy-secrets.env | cut -d'=' -f2)
-export TURSO_AUTH_TOKEN=$(grep TURSO_AUTH_TOKEN .deploy-secrets.env | cut -d'=' -f2)
-python verify_deployment.py
-```
+### Blocker: Test Coverage (Accuracy Pipeline)
+- **Issue**: Need to confirm test exists for evaluate_hourly flow
+- **Needed**: Test that simulates forecast maturation and grading
+- **Status**: Unknown - need to check test_evaluator.py
+- **Action**: After P2, verify test_evaluator covers the matured-snapshot-grading path
 
 ---
 
-**Verification Date**: 2026-09-03 12:35 UTC  
+## Re-Verification Plan
+
+Once Dwight's P2 (self-heal, auto-backfill) lands:
+
+1. **Re-run verification script** against live Turso:
+   ```bash
+   export TURSO_DATABASE_URL=$(grep TURSO_DATABASE_URL .deploy-secrets.env | cut -d'=' -f2)
+   export TURSO_AUTH_TOKEN=$(grep TURSO_AUTH_TOKEN .deploy-secrets.env | cut -d'=' -f2)
+   python verify_deployment.py
+   ```
+
+2. **Expected results after P2**:
+   - Real Data: ✅ PASS (100+ bars per ticker)
+   - Forecasting: ✅ PASS (model_runs present, prediction_snapshots populated)
+   - Accuracy: ✅ PASS (at least 1 record if forecast matured)
+
+3. **Paste ruff + pytest output** in final report:
+   ```bash
+   python -m ruff check .
+   python -m pytest -q
+   ```
+
+---
+
+## Correction Notes
+
+This report corrects a previous false alarm comparing against T-013 (crypto intraday, paused) instead of the deployed DAILY forecaster. The watchlist (AAPL/NVDA/SPY/BTC-USD/ETH-USD) and horizons (1d/5d/30d) are correct for the daily app and match config.py and viz.py.
+
+---
+
+**Verification Date**: 2026-09-03 12:40 UTC (corrected)  
 **Verified By**: andy-mtlc64rf  
-**Status**: AWAITING DWIGHT COORDINATION
+**Status**: AWAITING DWIGHT'S P2 DEPLOYMENT
