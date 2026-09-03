@@ -39,20 +39,17 @@ def fetch_intraday_bars_5m(
 
     try:
         all_bars: dict[str, dict] = {}
-        current_start = start
+        # Convert dates to UTC datetimes for proper chunking
+        current = datetime.combine(start, time.min, tzinfo=UTC)
+        end_dt = datetime.combine(end, time.max, tzinfo=UTC)
 
-        # Chunk by ~25 hours: 25h * 12 bars/h = 300 bars, at Coinbase's 300-candle hard limit
-        # (Coinbase rejects any request with >300 candles per scout doc S1.1)
-        chunk_hours = 25
-        while current_start <= end:
-            current_end = min(end, current_start + timedelta(hours=chunk_hours))
+        # Chunk by 25 hours: 25h * 12 bars/h = 300 bars (Coinbase's 300-candle limit per S1.1)
+        chunk_delta = timedelta(hours=25)
+        while current < end_dt:
+            chunk_end = min(end_dt, current + chunk_delta)
 
-            start_iso = datetime.combine(
-                current_start, time.min, tzinfo=UTC
-            ).isoformat()
-            end_iso = datetime.combine(
-                current_end, time(23, 59, 59), tzinfo=UTC
-            ).isoformat()
+            start_iso = current.isoformat()
+            end_iso = chunk_end.isoformat()
 
             url = f"{provider.base_url}/products/{product_id}/candles"
             params = {
@@ -88,7 +85,7 @@ def fetch_intraday_bars_5m(
                         }
                         all_bars[ts_str] = bar
 
-            current_start = current_end + timedelta(hours=1)
+            current = chunk_end
 
         sorted_bars = sorted(all_bars.values(), key=lambda b: b["ts"])
         return sorted_bars

@@ -136,8 +136,8 @@ def backfill_intraday_bars(
                 f"  Wrote {len(anchored_df)} anchored bars to intraday_bars_history (INSERT OR IGNORE)"
             )
 
-    except Exception as e:
-        logger.exception(f"Backfill failed: {e}")
+    except Exception:
+        logger.exception("Backfill failed")
         session.rollback()
         raise
 

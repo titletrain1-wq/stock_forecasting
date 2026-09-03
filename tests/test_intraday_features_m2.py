@@ -224,6 +224,9 @@ class TestNoLookahead:
         # Should not be NaN and should be finite
         assert not np.isnan(computed_feature)
         assert np.isfinite(computed_feature)
+        # Verify computed feature matches manual VWAP distance calculation
+        expected_vwap_distance = abs(45050.0 - manual_vwap)  # Close price at bar 12
+        assert np.isclose(computed_feature, expected_vwap_distance, atol=1e-9)
 
 
 class TestFundingZScore:
@@ -356,11 +359,12 @@ class TestScaler:
 
                 # Verify against what scaler learned (within tolerance)
                 # Note: sklearn may use slight variations in std computation
-                # So we just verify the scaler exists and is non-trivial
+                col_idx = feature_cols.index(col)
                 assert builder.scaler is not None
-                assert builder.scaler.mean_[feature_cols.index(col)] == pytest.approx(
+                assert builder.scaler.mean_[col_idx] == pytest.approx(
                     expected_mean, rel=1e-5
                 )
+                assert builder.scaler.scale_[col_idx] == pytest.approx(expected_std, rel=1e-5)
 
         # Transform both train and test using the train-fit scaler
         scaled_train = builder.transform(train_features)

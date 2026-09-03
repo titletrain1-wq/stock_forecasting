@@ -38,9 +38,6 @@ class TestCoinbaseBackfill:
 
         # Generate 365 days of 5-minute bars (24h * 60min / 5min = 288 bars/day)
         # 365 * 288 = 105,120 bars (but Coinbase has trading gaps; expect ~97k-100k)
-        expected_bars_per_day = 288
-        lookback_days = 365
-        expected_total = expected_bars_per_day * lookback_days
 
         # Build mock response: one chunk for simplicity
         start_date = date(2025, 9, 3)
@@ -194,24 +191,12 @@ class TestAnchorFiltering:
     """Test 3: Closed-bar anchor filtering."""
 
     def testfilter_closed_bar_anchors_1h_and_4h(self) -> None:
-        """Test that anchor filter keeps only :00 (1h) and :00/:04/:08/:12/:16/:20 (4h) times."""
-        # Create data at various minute markers
+        """Test anchor filter: 1h at every :00 (24/day), 4h at hour%4==0 & :00 (6/day)."""
+        # Create 1 full day of 5-minute bars (288 bars)
         base = datetime(2026, 9, 1, 0, 0, 0, tzinfo=UTC)
-        timestamps = [
-            base + timedelta(minutes=0),  # 00:00 - valid (both 1h and 4h)
-            base + timedelta(minutes=4),  # 00:04 - valid (4h only)
-            base + timedelta(minutes=5),  # 00:05 - invalid
-            base + timedelta(minutes=8),  # 00:08 - valid (4h only)
-            base + timedelta(minutes=12),  # 00:12 - valid (4h only)
-            base + timedelta(minutes=15),  # 00:15 - invalid
-            base + timedelta(minutes=16),  # 00:16 - valid (4h only)
-            base + timedelta(minutes=20),  # 00:20 - valid (4h only)
-            base + timedelta(minutes=25),  # 00:25 - invalid
-            base + timedelta(hours=1, minutes=0),  # 01:00 - valid (both 1h and 4h)
-        ]
-
         df_data = []
-        for ts in timestamps:
+        for i in range(288):  # 24h * 60min / 5min = 288
+            ts = base + timedelta(minutes=5 * i)
             df_data.append(
                 {
                     "ts": ts,
@@ -224,25 +209,21 @@ class TestAnchorFiltering:
             )
         df = pd.DataFrame(df_data)
 
-        # Filter
+        # Filter to anchors
         result = filter_closed_bar_anchors(df)
 
-        # Expected: 0, 4, 8, 12, 16, 20 minutes, and the 01:00 (60 minutes)
-        expected_minutes = {0, 4, 8, 12, 16, 20, 60}
-        result_minutes = set(result["ts"].dt.minute.tolist())
-        # Note: minute 60 wraps to 0, so check hour separately
-        result_hours = set(result["ts"].dt.hour.tolist())
+        # 1h anchors: all :00 timestamps = 24 per day (one per hour)
+        assert len(result) == 24, f"Expected 24 anchors (all :00 per day), got {len(result)}"
 
-        assert len(result) == 7, f"Expected 7 anchors, got {len(result)}"
-        # Check each row is valid
-        for _, row in result.iterrows():
-            minute = row["ts"].minute
-            hour = row["ts"].hour
-            is_1h_anchor = minute == 0
-            is_4h_anchor = minute in [4, 8, 12, 16, 20] or (
-                hour % 4 == 0 and minute == 0
-            )
-            assert is_1h_anchor or is_4h_anchor, f"Invalid anchor at {row['ts']}"
+        # Verify NO non-:00-minute timestamps survive
+        assert all(result["ts"].dt.minute == 0), "Non-zero minutes found"
+        assert all(result["ts"].dt.second == 0), "Non-zero seconds found"
+
+        # Count 4h-specific anchors (hour % 4 == 0)
+        result["hour"] = result["ts"].dt.hour
+        is_4h = result["hour"] % 4 == 0
+        count_4h = is_4h.sum()
+        assert count_4h == 6, f"Expected 6 4h anchors (00/04/08/12/16/20:00), got {count_4h}"
 
     def testfilter_closed_bar_anchors_empty(self) -> None:
         """Test that empty DataFrame returns empty result."""
@@ -374,7 +355,7 @@ class TestEndToEnd:
         # Mock backfill to try inserting the same bar
         with patch(
             "stock_forecasting.intraday_trainer.CoinbaseProvider"
-        ) as MockCoinbase:
+        ):
 
             def mock_fetch_fn(provider, ticker, start, end, **kwargs):
                 return [
