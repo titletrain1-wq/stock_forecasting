@@ -3,9 +3,11 @@
 ## Unreleased
 
 Chart technical indicators for on-demand analysis on the live price pane and
-dedicated sub-panes. All indicators are toggleable; defaults are on. Fixed a
+dedicated sub-panes (T-011). Three critical bug fixes (T-012): accuracy
+evaluator handling of pending forecasts, health checks filtering stale provider
+metrics, and daily model protection against live forming-candle leakage. Fixed a
 pre-existing cross-platform charset encoding bug that broke the v2.0.0 test
-suite on Windows.
+suite on Windows. Suite: 236 tests green.
 
 ### Added
 
@@ -25,7 +27,36 @@ suite on Windows.
   UTF-8. The v2.0.0 test suite passed on Unix (UTF-8 filesystem default) but
   failed on Windows (Latin-1 default) with encoding mismatches during chart
   render. Re-encoded the disclaimer and all string constants to UTF-8 explicitly.
-  Closes the T-010 Windows verification test failure. Test suite: 233 green.
+  Closes the T-010 Windows verification test failure.
+
+- **Stuck accuracy panel (Issue 7, T-012).** The accuracy evaluator job
+  previously did nothing when a forecast had matured but the realized bar was
+  not yet available (e.g. due to ingestion lag or weekend gaps). The accuracy
+  panel appeared frozen with stale data. Now the evaluator increments an
+  `eval_attempts` counter on each check; the accuracy panel displays "N/A" or
+  "evaluating…" while pending, and shows results once the bar arrives. No user
+  sees a phantom "graded" state that's actually waiting.
+
+- **Provider metrics masking outages (Issue 8, T-012).** Health checks aggregated
+  error rates, latencies, and quota metrics across all registered providers,
+  including retired ones (e.g. a CoinGecko row no longer in the active provider
+  list). A stale metric row from a disconnected provider could shade the
+  aggregated status `NOMINAL` even when all active providers were down. Health
+  checks now filter metrics to the currently-active provider set only. Added a
+  fallback-hardening safety net: if the active filter matches nothing but
+  metrics exist (a potential mapping regression), all metrics are used rather than
+  reporting `NOMINAL` — no outage can hide behind a filtering bug.
+
+- **Forming candle leaked into daily training (Issue c, T-012).** Coinbase WS
+  ticks include the current open (forming) candle while it is still in-session.
+  The worker propagated this to both `intraday_bars` (display cache, correct) and
+  the daily `ohlcv_bars` ML store (incorrect — the daily model expects immutable
+  closed bars only). The forming candle then inflated daily-bar `volume` and
+  `close` during the session, introducing live-price leakage into training
+  labels. Now the worker filters: only completed/closed bars flow to `ohlcv_bars`.
+  `intraday_bars` retains the forming candle for display continuity. Trade-off:
+  the freshest daily EOD close may lag ~20 hours for US equities (UTC-scoped
+  close gate, safe/conservative direction).
 
 ## v2.0.0 — 2026-09-02
 
