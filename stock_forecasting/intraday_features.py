@@ -188,14 +188,16 @@ class IntradayFeatureBuilder:
         return bars_df
 
     def fit_scaler(self, train_features: pd.DataFrame) -> None:
-        """Fit StandardScaler on training window.
+        """Fit StandardScaler on training window (drop NaN rows before fitting).
 
         Args:
             train_features: Feature DataFrame (columns after 'ts').
         """
         feature_cols = [c for c in train_features.columns if c != "ts"]
         self.scaler = StandardScaler()
-        self.scaler.fit(train_features[feature_cols].fillna(0))
+        # Drop NaN rows before fitting to avoid biasing the mean towards 0
+        train_clean = train_features[feature_cols].dropna()
+        self.scaler.fit(train_clean)
 
     def transform(self, features_df: pd.DataFrame) -> pd.DataFrame:
         """Apply fitted scaler to features.
