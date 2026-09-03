@@ -125,15 +125,22 @@ def _compute_indicators(bars: list[_BarLike]) -> dict[str, Any]:
 
     try:
         # Price pane indicators
-        result["sma20"] = ta.sma(df["close"], length=20).tolist()
-        result["sma50"] = ta.sma(df["close"], length=50).tolist()
+        sma20 = ta.sma(df["close"], length=20)
+        if sma20 is not None:
+            result["sma20"] = sma20.tolist()
+        sma50 = ta.sma(df["close"], length=50)
+        if sma50 is not None:
+            result["sma50"] = sma50.tolist()
+
         bbands = ta.bbands(df["close"], length=20, std=2)
         if bbands is not None and len(bbands.columns) >= 3:
             result["bb_upper"] = bbands.iloc[:, 2].tolist()
             result["bb_lower"] = bbands.iloc[:, 0].tolist()
 
         # RSI sub-pane
-        result["rsi"] = ta.rsi(df["close"], length=14).tolist()
+        rsi = ta.rsi(df["close"], length=14)
+        if rsi is not None:
+            result["rsi"] = rsi.tolist()
 
         # MACD sub-pane (columns: [MACD, MACDh(histogram), MACDs(signal)])
         macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
@@ -144,7 +151,9 @@ def _compute_indicators(bars: list[_BarLike]) -> dict[str, Any]:
 
         # Volume sub-pane
         result["volume"] = df["volume"].tolist()
-        result["volume_sma"] = ta.sma(df["volume"], length=20).tolist()
+        volume_sma = ta.sma(df["volume"], length=20)
+        if volume_sma is not None:
+            result["volume_sma"] = volume_sma.tolist()
     except (ValueError, TypeError, KeyError, AttributeError, IndexError) as e:
         # Gracefully handle indicator computation errors (e.g., insufficient data)
         logger.warning(f"Indicator computation failed: {e}")
