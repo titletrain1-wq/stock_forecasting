@@ -38,23 +38,26 @@ def _grade_forecast(
     lower_bound: float,
     upper_bound: float,
     predicted_return: float,
+    anchor_price: float,
     realized_price: float,
 ) -> dict[str, float | int]:
-    """Grade a single forecast against realized price.
+    """Grade a single forecast against the realized price.
 
-    Reuses EvaluatorService logic: compute returns, direction hit, CI coverage.
+    Same math as ``EvaluatorService.run``: realized log-return is measured from
+    the forecast's own anchor (the close at the as-of date) to the realized bar,
+    then compared to the predicted log-return.
 
     Args:
-        predicted_price: Model prediction.
-        lower_bound: 95% CI lower bound.
-        upper_bound: 95% CI upper bound.
-        predicted_return: Log-return prediction.
-        realized_price: Actual bar close (at or after target_ts).
+        predicted_price: Model point prediction.
+        lower_bound: 95% CI lower bound (price).
+        upper_bound: 95% CI upper bound (price).
+        predicted_return: Predicted log-return over the horizon.
+        anchor_price: Close at the as-of date the forecast was made from.
+        realized_price: Actual bar close at or after target_ts.
 
     Returns:
         Dict with error_abs, error_signed, is_direction_hit, is_within_ci, price_error_pct.
     """
-    anchor_price = realized_price / np.exp(predicted_return)
     if anchor_price <= 0 or realized_price <= 0:
         realized_return = 0.0
     else:
@@ -84,11 +87,11 @@ def _grade_forecast(
 class BacktestService:
     """Walk-forward backtest for evaluating forecasts on historical data."""
 
-    def __init__(self, session: Session) -> None:
-        """Initialize with database session."""
+    def __init__(self, session: Session, model_dir: str = "./model_store") -> None:
+        """Initialize with database session and model artifact directory."""
         self.session = session
         self.bar_repo = BarRepository(session)
-        self.forecaster = ForecastService(session)
+        self.forecaster = ForecastService(session, model_dir=model_dir)
 
     def run_backtest(
         self,
@@ -190,18 +193,21 @@ class BacktestService:
                 )
             return results
 
-        # Walk-forward: for each bar in backtest window, generate forecast
+        # Walk-forward: for each bar in backtest window, generate forecast using
+        # ONLY the bars at or before that date (as_of_ts cutoff, persist=False so
+        # nothing touches prediction_snapshots / accuracy_records).
         for as_of_bar in backtest_bars[:-1]:  # don't forecast from the last bar
             as_of_ts = as_of_bar.ts
 
-            # Step 1: Generate forecast with data up to as_of_ts
+            # Step 1: Generate forecast with data up to as_of_ts (no lookahead)
             try:
-                # Temporarily patch bar_repo to get_up_to to ensure no lookahead
                 snapshot_results = self.forecaster.generate_and_persist(
                     ticker,
                     horizons=horizons,
                     model_types=(model_type,),
                     now=_parse_iso(as_of_ts),
+                    as_of_ts=as_of_ts,
+                    persist=False,
                 )
             except (ValueError, FileNotFoundError) as e:
                 logger.debug(
@@ -223,6 +229,7 @@ class BacktestService:
                 lower_bound = result.lower_bound
                 upper_bound = result.upper_bound
                 predicted_return = result.predicted_return
+                anchor_price = result.anchor_price
                 target_ts = result.target_ts
 
                 # Find realized bar at or after target_ts
@@ -248,12 +255,17 @@ class BacktestService:
                 else:
                     realized_price = float(realized_bar.close)
 
+                # Skip if the "realized" bar is the anchor bar itself (no gap yet)
+                if realized_bar.ts <= as_of_ts:
+                    continue
+
                 # Grade this forecast
                 grade = _grade_forecast(
                     predicted_price=predicted_price,
                     lower_bound=lower_bound,
                     upper_bound=upper_bound,
                     predicted_return=predicted_return,
+                    anchor_price=anchor_price,
                     realized_price=realized_price,
                 )
                 graded_per_horizon[horizon].append(grade)

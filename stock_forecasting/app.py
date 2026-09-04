@@ -22,6 +22,7 @@ from stock_forecasting.panels import (
     build_explain_figure,
     explain_contributions,
     latest_snapshot,
+    verdict_label,
 )
 from stock_forecasting.schema import (
     AccuracyRecord,
@@ -290,8 +291,10 @@ def render_backtest_panel(engine, symbol: str) -> None:
     """Walk-forward backtest section with 'Run backtest' button. Spec §9."""
     st.subheader("Backtest (walk-forward)")
     st.caption(
-        "Labeled backtest: re-forecasts the past 180 days using the current model. "
-        "Mild train/test leakage is acceptable (full-history model). Results isolated from live forecasts."
+        "Re-forecasts each day in the lookback window using only the bars available "
+        "up to that day, then grades against what actually happened. Uses the current "
+        "full-history model (mild train/test leakage). Results are in-memory only - "
+        "nothing is written to the live forecast tables."
     )
 
     col1, col2 = st.columns(2)
@@ -335,10 +338,14 @@ def render_backtest_panel(engine, symbol: str) -> None:
                         "dir %": round(r.dir_acc * 100, 1),
                         "CI cov %": round(r.ci_coverage * 100, 1),
                         "n": r.n,
+                        "verdict": verdict_label(
+                            1 if (r.dir_acc >= 0.55 and r.n >= 30) else 0
+                        ),
                         "_sentence": (
-                            f"{h}: {r.n} forecasts, {r.dir_acc * 100:.0f}% directional"
+                            f"{h}: {r.n} forecasts, {r.dir_acc * 100:.0f}% directional, "
+                            f"{r.ci_coverage * 100:.0f}% inside the CI band"
                             if r.n > 0
-                            else f"{h}: no forecasts"
+                            else f"{h}: no forecasts (not enough history in the window)"
                         ),
                     }
                 )

@@ -253,15 +253,17 @@ class BarRepository:
         limit: int | None = None,
         interval: str = "1d",
     ) -> list[OhlcvBar]:
-        """Fetch bars up to and including cutoff_ts, ordered ascending by timestamp.
+        """Fetch bars with ts <= cutoff_ts, ordered ascending by timestamp.
 
         Used for walk-forward backtesting: ensures forecasts made as-of T only
-        consume bars with ts <= T (no lookahead).
+        consume bars with ts <= T (no lookahead). When ``limit`` is set the
+        *most recent* ``limit`` bars at or before the cutoff are returned (still
+        ascending), matching how ``get_latest`` feeds the forecaster.
 
         Args:
             ticker: Ticker symbol.
             cutoff_ts: ISO-8601 UTC timestamp (inclusive upper bound).
-            limit: Maximum number of bars to retrieve (None = all).
+            limit: Keep only the most recent N bars <= cutoff (None = all).
             interval: Bar interval (default '1d').
 
         Returns:
@@ -274,8 +276,10 @@ class BarRepository:
                 OhlcvBar.interval == interval,
                 OhlcvBar.ts <= cutoff_ts,
             )
-            .order_by(OhlcvBar.ts.asc())
+            .order_by(OhlcvBar.ts.desc())
         )
         if limit is not None:
             statement = statement.limit(limit)
-        return list(self.session.exec(statement).all())
+        rows = list(self.session.exec(statement).all())
+        rows.reverse()  # back to ascending
+        return rows

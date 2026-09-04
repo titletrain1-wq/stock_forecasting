@@ -68,6 +68,17 @@ class ForecastService:
         self.model_dir = Path(model_dir)
         self.bar_repo = bar_repo or BarRepository(session)
         self.feature_builder = feature_builder or FeatureBuilder()
+        # Loaded model artifacts, keyed by path. A walk-forward backtest reloads
+        # the same handful of artifacts hundreds of times; caching keeps it snappy.
+        self._artifact_cache: dict[str, dict] = {}
+
+    def _load_artifact(self, artifact_path: Path) -> dict:
+        key = str(artifact_path)
+        cached = self._artifact_cache.get(key)
+        if cached is None:
+            cached = joblib.load(artifact_path)
+            self._artifact_cache[key] = cached
+        return cached
 
     def generate_and_persist(
         self,
@@ -75,6 +86,8 @@ class ForecastService:
         horizons: Sequence[str] = ("1d", "5d", "30d"),
         model_types: Sequence[str] = ("ridge",),
         now: datetime | None = None,
+        as_of_ts: str | None = None,
+        persist: bool = True,
     ) -> dict[str, ForecastResult]:
         """Generate forecasts for given horizons and model types and persist snapshots in a single transaction.
 
@@ -82,6 +95,12 @@ class ForecastService:
             ticker: Asset ticker symbol.
             horizons: Forecast horizons to generate predictions for.
             model_types: Model types to generate predictions with.
+            now: Wall-clock timestamp stamped on the snapshot (defaults to utcnow).
+            as_of_ts: Walk-forward cutoff — when set, only bars with ``ts <= as_of_ts``
+                feed the forecast (no lookahead), and the anchor is the last such
+                bar. Used by the backtest.
+            persist: When False, snapshots are built and returned but NOT written
+                to the database (backtest / dry-run). Defaults to True.
 
         Returns:
             Dictionary mapping forecast keys (e.g. '1d_ridge', '1d') to ForecastResult instances.
@@ -90,8 +109,11 @@ class ForecastService:
             ValueError: If historical bars or active models are missing or insufficient.
             FileNotFoundError: If model artifact file is missing from disk.
         """
-        # 1. Fetch latest 100 bars from repository
-        bars = self.bar_repo.get_latest(ticker, limit=100)
+        # 1. Fetch the most recent 100 bars (optionally as-of a walk-forward cutoff)
+        if as_of_ts is not None:
+            bars = self.bar_repo.get_up_to(ticker, as_of_ts, limit=100)
+        else:
+            bars = self.bar_repo.get_latest(ticker, limit=100)
         if not bars:
             raise ValueError(f"No bars found for ticker '{ticker}'.")
         if len(bars) < 50:
@@ -205,15 +227,22 @@ class ForecastService:
                             f"Model artifact file not found at '{artifact_path}'."
                         )
 
-                artifact = joblib.load(artifact_path)
+                artifact = self._load_artifact(artifact_path)
                 model = artifact["model"]
                 scaler = artifact.get("scaler")
                 feature_cols = artifact.get(
                     "feature_list",
                     [c for c in features_df.columns if c != "ts"],
                 )
-                residual_std = float(
-                    artifact.get("residual_std", model_run.residual_std)
+                # Prefer the artifact's residual_std, but fall back to the value
+                # persisted on the ModelRun when the artifact's is missing or
+                # degenerate (some older artifacts stored ~1e-16, which collapses
+                # the CI band to zero width).
+                art_std = artifact.get("residual_std")
+                residual_std = (
+                    float(art_std)
+                    if art_std is not None and float(art_std) > 1e-8
+                    else float(model_run.residual_std)
                 )
                 model_version = str(
                     artifact.get("model_version", model_run.model_version)
@@ -305,12 +334,13 @@ class ForecastService:
                 if horizon not in results:
                     results[horizon] = result
 
-        # 5. Persist all snapshots in ONE atomic transaction
-        for s in snapshots:
-            self.session.add(s)
-        self.session.commit()
-        for s in snapshots:
-            self.session.refresh(s)
+        # 5. Persist all snapshots in ONE atomic transaction (unless dry-run)
+        if persist:
+            for s in snapshots:
+                self.session.add(s)
+            self.session.commit()
+            for s in snapshots:
+                self.session.refresh(s)
 
         return results
 

@@ -1,200 +1,154 @@
-"""Tests for walk-forward backtest functionality."""
+"""Tests for the walk-forward backtest (T-019).
 
-from datetime import UTC, datetime, timedelta
+These exercise the real forecast+grade path against a trained model, and pin the
+three properties that make the backtest trustworthy:
+  1. it produces graded forecasts (n > 0), not an empty smoke result;
+  2. no lookahead — a forecast made as-of date T only consumes bars with ts <= T;
+  3. isolation — it never writes to prediction_snapshots / accuracy_records.
+"""
 
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
 from sqlmodel import Session, select
 
 from stock_forecasting.backtest import BacktestResult, BacktestService
-from stock_forecasting.schema import ModelRun, OhlcvBar, Ticker
+from stock_forecasting.bar_store import BarRepository
+from stock_forecasting.providers.base import Bar
+from stock_forecasting.schema import AccuracyRecord, PredictionSnapshot, Ticker
+from stock_forecasting.trainer import Trainer
 
 
-def _seed_bars(session: Session, ticker: str, count: int = 200) -> None:
-    """Create synthetic daily bars for testing."""
-    base_ts = datetime(2024, 1, 1, tzinfo=UTC)
-    for i in range(count):
-        ts = base_ts + timedelta(days=i)
-        ts_iso = ts.isoformat()
-        bar = OhlcvBar(
-            ticker=ticker,
-            interval="1d",
-            ts=ts_iso,
-            open=100.0 + i * 0.1,
-            high=101.0 + i * 0.1,
-            low=99.0 + i * 0.1,
-            close=100.5 + i * 0.1,
-            adj_close=100.5 + i * 0.1,
-            volume=1000000.0,
-            source="test",
-            ingested_at=ts_iso,
+def _seed_bars(session: Session, ticker: str, n: int = 420, seed: int = 7) -> None:
+    """Insert deterministic synthetic daily bars (geometric random walk)."""
+    rng = np.random.default_rng(seed)
+    dates = pd.date_range("2023-01-01", periods=n, freq="D", tz="UTC")
+    log_returns = rng.normal(0.0004, 0.014, n)
+    close = 100.0 * np.exp(np.cumsum(log_returns))
+    high = close * (1.0 + np.abs(rng.normal(0.004, 0.003, n)))
+    low = close * (1.0 - np.abs(rng.normal(0.004, 0.003, n)))
+    open_ = (high + low) / 2.0
+    volume = rng.lognormal(10.0, 0.3, n)
+    bars = [
+        Bar(
+            ts=dates[i].isoformat(),
+            open=float(open_[i]),
+            high=float(high[i]),
+            low=float(low[i]),
+            close=float(close[i]),
+            adj_close=float(close[i]),
+            volume=float(volume[i]),
         )
-        session.add(bar)
-    session.commit()
+        for i in range(n)
+    ]
+    BarRepository(session).upsert_bars(ticker=ticker, bars=bars, source="test")
 
 
 def _seed_ticker(session: Session, symbol: str) -> None:
-    """Ensure ticker exists."""
-    ticker = session.exec(select(Ticker).where(Ticker.symbol == symbol)).first()
-    if not ticker:
-        ticker = Ticker(
-            symbol=symbol,
-            asset_class="equity",
-            display_name=symbol,
-            provider="test",
-            provider_symbol=symbol,
-            price_basis="adjusted",
-            added_at=datetime.now(UTC).isoformat(),
+    if not session.exec(select(Ticker).where(Ticker.symbol == symbol)).first():
+        session.add(
+            Ticker(
+                symbol=symbol,
+                asset_class="equity",
+                display_name=symbol,
+                provider="test",
+                provider_symbol=symbol,
+                price_basis="adjusted",
+                added_at="2023-01-01T00:00:00+00:00",
+            )
         )
-        session.add(ticker)
         session.commit()
 
 
-def _seed_model_run(
-    session: Session, ticker: str, horizon: str, model_type: str = "ridge"
-) -> ModelRun:
-    """Create a ModelRun for testing."""
-    run = ModelRun(
-        ticker=ticker,
-        horizon=horizon,
-        model_type=model_type,
-        model_version="1.0.0",
-        code_git_sha="abc123",
-        trained_at=datetime.now(UTC).isoformat(),
-        train_start="2024-01-01T00:00:00+00:00",
-        train_end="2024-06-30T00:00:00+00:00",
-        is_active=1,
-        artifact_path="model_store/ridge_AAPL_1d.pkl",
-        residual_std=0.05,
-    )
-    session.add(run)
-    session.commit()
-    return run
+def _trained_service(
+    session: Session, tmp_path: Path, ticker: str, horizons: tuple[str, ...]
+) -> BacktestService:
+    _seed_ticker(session, ticker)
+    _seed_bars(session, ticker)
+    trainer = Trainer(session=session, model_dir=tmp_path)
+    for h in horizons:
+        trainer.train(ticker=ticker, horizon=h, model_type="ridge")
+    return BacktestService(session, model_dir=str(tmp_path))
 
 
-def test_backtest_service_initialization(db_session):
-    """Test BacktestService initializes without errors."""
-    service = BacktestService(db_session)
-    assert service.session is not None
-    assert service.bar_repo is not None
-    assert service.forecaster is not None
+def test_backtest_produces_graded_forecasts(db_session, tmp_path):
+    """A real model + 400 bars -> many graded forecasts per horizon, valid ranges."""
+    svc = _trained_service(db_session, tmp_path, "BTQ", ("1d", "5d"))
+    results = svc.run_backtest("BTQ", horizons=("1d", "5d"), lookback_days=90)
 
-
-def test_backtest_with_synthetic_data(db_session):
-    """Test backtest runs on synthetic data and yields >0 graded rows per horizon."""
-    ticker = "TEST"
-
-    _seed_ticker(db_session, ticker)
-    _seed_bars(db_session, ticker, count=100)
-
-    # Even without a model artifact, we should be able to run the backtest
-    # and get 0 forecasts (expected, since no model exists)
-    service = BacktestService(db_session)
-    results = service.run_backtest(
-        ticker=ticker,
-        horizons=("1d", "5d"),
-        lookback_days=30,
-        model_type="ridge",
-    )
-
-    # Should have results for both horizons
-    assert len(results) == 2
-    assert "1d" in results
-    assert "5d" in results
-
-    # With synthetic data but no model, we expect n=0
     for h in ("1d", "5d"):
-        assert isinstance(results[h], BacktestResult)
-        assert results[h].ticker == ticker
-        assert results[h].horizon == h
-        assert results[h].model_type == "ridge"
-        assert results[h].n >= 0  # Could be 0 if no model artifact
+        r = results[h]
+        assert isinstance(r, BacktestResult)
+        assert r.n >= 20, f"{h}: expected many graded forecasts, got n={r.n}"
+        assert r.mae > 0.0
+        assert 0.0 <= r.dir_acc <= 1.0
+        assert 0.0 <= r.ci_coverage <= 1.0
+        assert r.mae_price_pct > 0.0
 
 
-def test_backtest_result_structure(db_session):
-    """Test BacktestResult dataclass has all required fields."""
-    ticker = "AAPL"
+def test_backtest_no_lookahead(db_session, tmp_path, monkeypatch):
+    """Every bar the forecaster sees during the backtest has ts <= the as-of cutoff."""
+    svc = _trained_service(db_session, tmp_path, "NLQ", ("1d",))
+    real_get_up_to = BarRepository.get_up_to
+    seen: list[tuple[str, str]] = []
 
-    _seed_ticker(db_session, ticker)
-    _seed_bars(db_session, ticker, count=100)
+    def _spy(self, ticker, cutoff_ts, limit=None, interval="1d"):
+        rows = real_get_up_to(self, ticker, cutoff_ts, limit=limit, interval=interval)
+        for b in rows:
+            seen.append((b.ts, cutoff_ts))
+        return rows
 
-    service = BacktestService(db_session)
-    results = service.run_backtest(
-        ticker=ticker, horizons=("1d",), lookback_days=30, model_type="ridge"
+    monkeypatch.setattr(BarRepository, "get_up_to", _spy)
+    svc.run_backtest("NLQ", horizons=("1d",), lookback_days=60)
+
+    assert seen, "backtest never fetched bars via get_up_to"
+    assert all(bar_ts <= cutoff for bar_ts, cutoff in seen), (
+        "lookahead: a bar with ts > cutoff was fed to the forecaster"
     )
 
-    result = results["1d"]
-    assert hasattr(result, "ticker")
-    assert hasattr(result, "horizon")
-    assert hasattr(result, "model_type")
-    assert hasattr(result, "n")
-    assert hasattr(result, "mae")
-    assert hasattr(result, "rmse")
-    assert hasattr(result, "dir_acc")
-    assert hasattr(result, "ci_coverage")
-    assert hasattr(result, "mae_price_pct")
 
-    # All metrics should be finite
-    assert isinstance(result.n, int)
-    assert isinstance(result.mae, float)
-    assert isinstance(result.rmse, float)
-    assert isinstance(result.dir_acc, float)
-    assert isinstance(result.ci_coverage, float)
-    assert isinstance(result.mae_price_pct, float)
+def test_backtest_is_isolated_from_live_tables(db_session, tmp_path):
+    """Backtest writes nothing to prediction_snapshots or accuracy_records."""
+    svc = _trained_service(db_session, tmp_path, "ISQ", ("1d",))
+    before_snaps = len(db_session.exec(select(PredictionSnapshot)).all())
+    before_acc = len(db_session.exec(select(AccuracyRecord)).all())
+
+    svc.run_backtest("ISQ", horizons=("1d",), lookback_days=60)
+
+    assert len(db_session.exec(select(PredictionSnapshot)).all()) == before_snaps
+    assert len(db_session.exec(select(AccuracyRecord)).all()) == before_acc
 
 
-def test_backtest_no_bars_returns_empty_results(db_session):
-    """Test backtest returns 0 results when no bars available."""
-    ticker = "NONEXISTENT"
-
-    service = BacktestService(db_session)
-    results = service.run_backtest(
-        ticker=ticker, horizons=("1d", "5d", "30d"), lookback_days=180
+def test_backtest_deterministic(db_session, tmp_path):
+    """Same data + same model -> identical metrics across two runs."""
+    svc = _trained_service(db_session, tmp_path, "DTQ", ("1d",))
+    a = svc.run_backtest("DTQ", horizons=("1d",), lookback_days=60)["1d"]
+    b = svc.run_backtest("DTQ", horizons=("1d",), lookback_days=60)["1d"]
+    assert (a.n, a.mae, a.dir_acc, a.ci_coverage) == (
+        b.n,
+        b.mae,
+        b.dir_acc,
+        b.ci_coverage,
     )
 
-    # Should return dict with all horizons, each with n=0
-    assert len(results) == 3
+
+def test_backtest_no_bars_returns_zeroed_results(db_session):
+    """No bars at all -> a full result dict, every horizon n=0 (no crash)."""
+    results = BacktestService(db_session).run_backtest(
+        "NOPE", horizons=("1d", "5d", "30d"), lookback_days=180
+    )
+    assert set(results) == {"1d", "5d", "30d"}
     for h in ("1d", "5d", "30d"):
-        assert h in results
         assert results[h].n == 0
         assert results[h].mae == 0.0
-        assert results[h].rmse == 0.0
 
 
-def test_backtest_metrics_are_ordered(db_session):
-    """Test CI bounds are ordered (lower < upper) when computed."""
-    ticker = "CI_TEST"
-
-    _seed_ticker(db_session, ticker)
-    _seed_bars(db_session, ticker, count=100)
-
-    service = BacktestService(db_session)
-    results = service.run_backtest(ticker=ticker, horizons=("1d",), lookback_days=30)
-
-    # Metrics should be non-negative where applicable
-    result = results["1d"]
-    if result.n > 0:
-        assert result.mae >= 0
-        assert result.rmse >= 0
-        assert 0 <= result.dir_acc <= 1
-        assert 0 <= result.ci_coverage <= 1
-        assert result.mae_price_pct >= 0
-
-
-def test_backtest_lookback_days_parameter(db_session):
-    """Test lookback_days parameter restricts backtest window."""
-    ticker = "LOOKBACK_TEST"
-
-    _seed_ticker(db_session, ticker)
-    # Create 100 days of bars
-    _seed_bars(db_session, ticker, count=100)
-
-    service = BacktestService(db_session)
-
-    # Backtest with 30-day lookback
-    results_30 = service.run_backtest(ticker=ticker, horizons=("1d",), lookback_days=30)
-
-    # Backtest with 60-day lookback
-    results_60 = service.run_backtest(ticker=ticker, horizons=("1d",), lookback_days=60)
-
-    # Both should return valid results (n may be same if no model artifact)
-    assert results_30["1d"].ticker == ticker
-    assert results_60["1d"].ticker == ticker
+def test_backtest_lookback_widens_sample(db_session, tmp_path):
+    """A longer lookback grades at least as many forecasts as a shorter one."""
+    svc = _trained_service(db_session, tmp_path, "LBQ", ("1d",))
+    short = svc.run_backtest("LBQ", horizons=("1d",), lookback_days=30)["1d"]
+    long = svc.run_backtest("LBQ", horizons=("1d",), lookback_days=90)["1d"]
+    assert long.n >= short.n > 0
