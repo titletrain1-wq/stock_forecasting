@@ -286,6 +286,75 @@ def render_accuracy_panel(engine, symbol: str) -> None:
         st.caption(row["_sentence"])
 
 
+def render_backtest_panel(engine, symbol: str) -> None:
+    """Walk-forward backtest section with 'Run backtest' button. Spec §9."""
+    st.subheader("Backtest (walk-forward)")
+    st.caption(
+        "Labeled backtest: re-forecasts the past 180 days using the current model. "
+        "Mild train/test leakage is acceptable (full-history model). Results isolated from live forecasts."
+    )
+
+    col1, col2 = st.columns(2)
+    days = col1.number_input("Lookback days", value=180, min_value=30, max_value=365)
+    run_btn = col2.button("Run backtest", key=f"backtest_btn_{symbol}")
+
+    if run_btn:
+        with st.spinner(f"Running backtest for {symbol}..."):
+            try:
+                from stock_forecasting.backtest import BacktestService
+
+                with Session(engine) as session:
+                    service = BacktestService(session)
+                    results = service.run_backtest(
+                        ticker=symbol,
+                        horizons=("1d", "5d", "30d"),
+                        lookback_days=int(days),
+                        model_type="ridge",
+                    )
+
+                # Cache result in session state
+                if "backtest_cache" not in st.session_state:
+                    st.session_state.backtest_cache = {}
+                st.session_state.backtest_cache[symbol] = results
+                st.success(f"Backtest complete for {symbol}")
+            except Exception as e:  # noqa: BLE001
+                st.error(f"Backtest failed: {e}")
+
+    # Display cached backtest results
+    cached = st.session_state.get("backtest_cache", {}).get(symbol)
+    if cached:
+        rows = []
+        for h in ("1d", "5d", "30d"):
+            if h in cached:
+                r = cached[h]
+                rows.append(
+                    {
+                        "horizon": h,
+                        "MAE %": round(r.mae_price_pct * 100, 2),
+                        "RMSE": round(r.rmse, 4),
+                        "dir %": round(r.dir_acc * 100, 1),
+                        "CI cov %": round(r.ci_coverage * 100, 1),
+                        "n": r.n,
+                        "_sentence": (
+                            f"{h}: {r.n} forecasts, {r.dir_acc * 100:.0f}% directional"
+                            if r.n > 0
+                            else f"{h}: no forecasts"
+                        ),
+                    }
+                )
+        if rows:
+            st.dataframe(
+                [
+                    {k: v for k, v in row.items() if not k.startswith("_")}
+                    for row in rows
+                ],
+                hide_index=True,
+                use_container_width=True,
+            )
+            for row in rows:
+                st.caption(row["_sentence"])
+
+
 def render_explain_panel(engine, symbol: str) -> None:
     """Collapsible 'Why this forecast?' — signed feature contributions. Spec §9."""
     with st.expander("Why this forecast?", expanded=False):
@@ -409,6 +478,7 @@ def main() -> None:
     ticker = next(t for t in tickers if t.symbol == symbol)
     render_chart_panel(engine, symbol, ticker)
     render_accuracy_panel(engine, symbol)
+    render_backtest_panel(engine, symbol)
     render_explain_panel(engine, symbol)
     render_health_panel(engine)
 

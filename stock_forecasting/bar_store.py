@@ -245,3 +245,37 @@ class BarRepository:
         """Fetch timestamp of the latest available bar for a ticker."""
         latest = self.get_latest(ticker, limit=1, interval=interval)
         return latest[0].ts if latest else None
+
+    def get_up_to(
+        self,
+        ticker: str,
+        cutoff_ts: str,
+        limit: int | None = None,
+        interval: str = "1d",
+    ) -> list[OhlcvBar]:
+        """Fetch bars up to and including cutoff_ts, ordered ascending by timestamp.
+
+        Used for walk-forward backtesting: ensures forecasts made as-of T only
+        consume bars with ts <= T (no lookahead).
+
+        Args:
+            ticker: Ticker symbol.
+            cutoff_ts: ISO-8601 UTC timestamp (inclusive upper bound).
+            limit: Maximum number of bars to retrieve (None = all).
+            interval: Bar interval (default '1d').
+
+        Returns:
+            List of OhlcvBar models sorted ascending by timestamp.
+        """
+        statement = (
+            select(OhlcvBar)
+            .where(
+                OhlcvBar.ticker == ticker,
+                OhlcvBar.interval == interval,
+                OhlcvBar.ts <= cutoff_ts,
+            )
+            .order_by(OhlcvBar.ts.asc())
+        )
+        if limit is not None:
+            statement = statement.limit(limit)
+        return list(self.session.exec(statement).all())

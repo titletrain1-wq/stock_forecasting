@@ -168,9 +168,85 @@ def run_scheduler() -> None:
         sys.exit(0)
 
 
+def run_backtest(ticker: str | None = None, days: int = 180) -> None:
+    """Run walk-forward backtest for a ticker and print results.
+
+    Args:
+        ticker: Ticker symbol (e.g. 'BTC-USD'). If None, use first active ticker.
+        days: Lookback window in days (default 180).
+    """
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+    logger.info("Starting backtest (ticker=%s, days=%d)", ticker, days)
+
+    from sqlmodel import Session, select
+
+    from stock_forecasting.backtest import BacktestService
+    from stock_forecasting.database import seed_watchlist
+    from stock_forecasting.schema import Ticker
+    from stock_forecasting.worker import WorkerScheduler
+
+    try:
+        scheduler = WorkerScheduler()
+        seed_watchlist(scheduler.engine)
+    except Exception:
+        logger.exception("Could not construct WorkerScheduler - aborting")
+        sys.exit(1)
+
+    with Session(scheduler.engine) as session:
+        # Determine target ticker
+        if ticker is None:
+            # Use first active ticker
+            t = session.exec(select(Ticker).where(Ticker.active == 1)).first()
+            if not t:
+                logger.error("No active tickers found")
+                sys.exit(1)
+            ticker = t.symbol
+
+        # Run backtest
+        service = BacktestService(session)
+        results = service.run_backtest(
+            ticker=ticker,
+            horizons=("1d", "5d", "30d"),
+            lookback_days=days,
+            model_type="ridge",
+        )
+
+    # Print results table
+    print(f"\nBacktest Results: {ticker} (lookback={days}d)")
+    print("=" * 80)
+    print(f"{'Horizon':<10} {'n':<5} {'MAE':<10} {'RMSE':<10} {'Dir %':<8} {'CI %':<8}")
+    print("-" * 80)
+    for h in ("1d", "5d", "30d"):
+        if h in results:
+            r = results[h]
+            print(
+                f"{h:<10} {r.n:<5} {r.mae:<10.6f} {r.rmse:<10.6f} "
+                f"{r.dir_acc * 100:<8.1f} {r.ci_coverage * 100:<8.1f}"
+            )
+    print("=" * 80)
+    sys.exit(0)
+
+
 def main() -> None:
-    """CLI entry point: route to backfill, run_once, or run_scheduler."""
-    if "--backfill" in sys.argv:
+    """CLI entry point: route to backfill, backtest, run_once, or run_scheduler."""
+    if "--backtest" in sys.argv:
+        ticker = None
+        days = 180
+        if "--ticker" in sys.argv:
+            try:
+                ticker = sys.argv[sys.argv.index("--ticker") + 1]
+            except IndexError:
+                pass
+        if "--days" in sys.argv:
+            try:
+                days = int(sys.argv[sys.argv.index("--days") + 1])
+            except (IndexError, ValueError):
+                logger.warning("Bad --days value, defaulting to %d", days)
+        run_backtest(ticker, days)
+    elif "--backfill" in sys.argv:
         years = 2
         if "--years" in sys.argv:
             try:
