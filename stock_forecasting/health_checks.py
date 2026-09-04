@@ -17,7 +17,10 @@ from typing import Any
 
 from sqlmodel import Session, select
 
-from stock_forecasting.market_calendar import classify_bar_freshness
+from stock_forecasting.market_calendar import (
+    classify_bar_freshness,
+    equity_market_is_open,
+)
 from stock_forecasting.schema import (
     IntradayBar,
     LinkMetrics,
@@ -565,8 +568,20 @@ class HealthChecker:
         )
 
     def check_live_feed_equity(self, now: datetime | None = None) -> HealthCheckResult:
-        """Check status of 15m-delayed equity intraday feed (<25m NOMINAL, 25-45m DEGRADED, >45m CRITICAL)."""
+        """Check status of 15m-delayed equity intraday feed (<25m NOMINAL, 25-45m DEGRADED, >45m CRITICAL).
+
+        A stale feed only matters while the NYSE session is open; nights,
+        weekends and holidays report NOMINAL ("market closed").
+        """
         current_time = now or datetime.now(UTC)
+
+        if not equity_market_is_open(current_time):
+            return HealthCheckResult(
+                check_name="live_feed_equity",
+                status="NOMINAL",
+                message="Equity intraday feed idle (US market closed).",
+            )
+
         bars = self.session.exec(
             select(IntradayBar)
             .where(IntradayBar.source == "yfinance_intraday")

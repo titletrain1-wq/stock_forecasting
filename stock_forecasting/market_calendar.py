@@ -64,6 +64,26 @@ def last_completed_equity_session(now: datetime) -> date | None:
     return completed[-1] if completed else None
 
 
+def equity_market_is_open(now: datetime | None = None) -> bool:
+    """True if the NYSE regular session is open at ``now`` (weekends/holidays/
+    after-hours are all False).
+
+    Used by the live equity intraday feed check: a stale 15-min feed is only a
+    problem while the market is actually trading.
+    """
+    current = _as_utc(now) if now is not None else datetime.now(UTC)
+    sched = _NYSE.schedule(
+        start_date=(current - timedelta(days=7)).date().isoformat(),
+        end_date=current.date().isoformat(),
+    )
+    try:
+        return bool(_NYSE.open_at_time(sched, current))
+    except ValueError:
+        # open_at_time raises if `current` is outside the schedule's span
+        # (e.g. after the last session's close) -> market is closed.
+        return False
+
+
 def _equity_sessions_after(d: date, upto: date) -> list[date]:
     """NYSE session dates strictly after ``d`` and up to (inclusive) ``upto``."""
     if upto <= d:

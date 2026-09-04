@@ -206,8 +206,12 @@ def test_check_live_feed_crypto_thresholds(health_db) -> None:
 
 
 def test_check_live_feed_equity_thresholds(health_db) -> None:
-    """Verify check_live_feed_equity status thresholds (<25m NOMINAL, 25-45m DEGRADED, >45m CRITICAL)."""
-    now = datetime.now(UTC)
+    """Verify check_live_feed_equity status thresholds (<25m NOMINAL, 25-45m DEGRADED, >45m CRITICAL).
+
+    ``now`` is pinned to a Wednesday 15:00 UTC (NYSE open) so the age thresholds
+    are what is under test, not the market-closed short-circuit.
+    """
+    now = datetime(2026, 9, 2, 15, 0, tzinfo=UTC)
     with Session(health_db) as session:
         checker = HealthChecker(session)
 
@@ -247,6 +251,13 @@ def test_check_live_feed_equity_thresholds(health_db) -> None:
         session.commit()
         res_critical = checker.check_live_feed_equity(now=now)
         assert res_critical.status == "CRITICAL"
+
+        # 4. Same stale bar, but outside market hours (Sat) -> NOMINAL, not CRITICAL
+        res_closed = checker.check_live_feed_equity(
+            now=datetime(2026, 9, 5, 15, 0, tzinfo=UTC)
+        )
+        assert res_closed.status == "NOMINAL"
+        assert "market closed" in res_closed.message.lower()
 
 
 def test_build_health_view_returns_live_feed_rows(health_db) -> None:
